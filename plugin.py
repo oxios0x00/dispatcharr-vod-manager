@@ -263,10 +263,10 @@ class Plugin:
         },
         {
             "id": "strm_include_id_tag",
-            "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames",
+            "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
             "type": "boolean",
             "default": False,
-            "help_text": "OFF (default): filenames are the title only, as before. ON: appends the Jellyfin/Emby external-id tag when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing .strm folder/file that has an id on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
+            "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder (not the files inside it — they'd all share the same id, so it would be pure redundancy) when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing tagged folder on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
         },
         {
             "id": "strm_require_id",
@@ -1295,12 +1295,15 @@ class Plugin:
                 # like a pruned relation would be.
                 skipped_no_id += 1
                 continue
+            safe_name = sanitize_filename(movie.name)
             tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
-            safe_name = sanitize_filename(movie.name + tag)
+            movie_dir = os.path.join(library_dir, sanitize_filename(movie.name + tag))
             suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
-            movie_dir = os.path.join(library_dir, safe_name)
 
             for rel, suffix in zip(movie_relations, suffixes):
+                # The id tag lives on the folder only — every file inside
+                # it shares the same movie, so repeating the tag on each
+                # one would be pure redundancy.
                 path = os.path.join(movie_dir, f"{safe_name}{suffix}.strm")
                 url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
                 try:
@@ -1378,12 +1381,16 @@ class Plugin:
                 continue
             series_seen.add(series.id)
 
+            # The id tag lives on the series folder only — every episode
+            # under it shares the same series, so repeating the tag on
+            # each episode filename would be pure redundancy.
+            safe_series = sanitize_filename(series.name)
             tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
-            safe_series = sanitize_filename(series.name + tag)
+            series_dir = os.path.join(library_dir, sanitize_filename(series.name + tag))
             season_num = episode.season_number or 1
             episode_num = episode.episode_number or 0
             base_filename = f"{safe_series} - S{season_num:02d}E{episode_num:02d}"
-            season_dir = os.path.join(library_dir, safe_series, f"Season {season_num:02d}")
+            season_dir = os.path.join(series_dir, f"Season {season_num:02d}")
 
             suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])
 

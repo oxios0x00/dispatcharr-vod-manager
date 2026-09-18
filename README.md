@@ -83,12 +83,14 @@ files) is never touched.
 
 Two more settings, both OFF by default:
 
-- **Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames** — appends
-  the Jellyfin/Emby external-id tag to the folder/file name when the
-  title has a TMDB or IMDB id, so the media server identifies it by id
-  instead of guessing from text alone. Falls back to the plain title
-  when neither id is known. Turning this on renames every existing
-  `.strm` that has an id on the next Generate run — a deliberate,
+- **Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series
+  folder name** — appends the Jellyfin/Emby external-id tag to the
+  movie or series folder (not the `.strm` files inside it — they'd all
+  share the same id, so repeating it there would be pure redundancy)
+  when the title has a TMDB or IMDB id, so the media server identifies
+  it by id instead of guessing from text alone. Falls back to the plain
+  title when neither id is known. Turning this on renames every
+  existing tagged folder on the next Generate run — a deliberate,
   one-time, library-wide rename (the stale-file cleanup above removes
   the old paths automatically), not something to flip on a library your
   media server is actively serving without expecting that.

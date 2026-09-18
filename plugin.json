@@ -172,10 +172,10 @@
     },
     {
       "id": "strm_include_id_tag",
-      "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames",
+      "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): filenames are the title only, as before. ON: appends the Jellyfin/Emby external-id tag when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing .strm folder/file that has an id on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
+      "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder (not the files inside it — they'd all share the same id, so it would be pure redundancy) when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing tagged folder on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
     },
     {
       "id": "strm_require_id",
