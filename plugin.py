@@ -536,7 +536,7 @@ class Plugin:
 
         data_dir = os.environ.get(
             "VOD_MANAGER_DATA_DIR",
-            os.path.join(os.path.dirname(os.path.dirname(__file__)), "vod_manager_data"),
+            os.path.join(os.path.dirname(__file__), "data"),
         )
         self.store = Store(data_dir)
 
