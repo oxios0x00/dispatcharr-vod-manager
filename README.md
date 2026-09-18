@@ -81,6 +81,25 @@ removed automatically on the next run — tracked by this plugin itself
 folder contents, so anything you added by hand (NFOs, posters, your own
 files) is never touched.
 
+Two more settings, both OFF by default:
+
+- **Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames** — appends
+  the Jellyfin/Emby external-id tag to the folder/file name when the
+  title has a TMDB or IMDB id, so the media server identifies it by id
+  instead of guessing from text alone. Falls back to the plain title
+  when neither id is known. Turning this on renames every existing
+  `.strm` that has an id on the next Generate run — a deliberate,
+  one-time, library-wide rename (the stale-file cleanup above removes
+  the old paths automatically), not something to flip on a library your
+  media server is actively serving without expecting that.
+- **Skip titles with no TMDB/IMDB id** — some providers never expose
+  either id for certain content (a whole series catalogue, in one
+  confirmed real case), leaving a media server nothing reliable to
+  identify that file by no matter how clean the title text is. Turn
+  this on to skip generating (or remove an already-generated) `.strm`
+  for those titles entirely instead of shipping one you know Emby/
+  Jellyfin can't match properly.
+
 ## Scheduling (run automatically)
 
 Uses django-celery-beat directly (no formal plugin scheduling API exists

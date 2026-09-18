@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from strm import build_proxy_url, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+from strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
 
 def test_sanitize_filename_strips_invalid_characters():
@@ -22,6 +22,20 @@ def test_sanitize_filename_never_empty():
     assert sanitize_filename('???') == "Unknown"
     assert sanitize_filename("") == "Unknown"
     assert sanitize_filename(None) == "Unknown"
+
+
+def test_id_tag_prefers_tmdb():
+    assert id_tag("631842", "tt1234567") == " [tmdbid-631842]"
+
+
+def test_id_tag_falls_back_to_imdb():
+    assert id_tag(None, "tt1234567") == " [imdbid-tt1234567]"
+    assert id_tag("", "tt1234567") == " [imdbid-tt1234567]"
+
+
+def test_id_tag_empty_when_neither_known():
+    assert id_tag(None, None) == ""
+    assert id_tag("", "") == ""
 
 
 def test_build_proxy_url_pins_stream_id():

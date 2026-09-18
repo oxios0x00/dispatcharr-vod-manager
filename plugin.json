@@ -168,7 +168,21 @@
       "label": "Run .strm generation automatically with Scan + Process",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): only runs from the Generate buttons or its own scheduled action."
+      "help_text": "OFF (default): only runs from the Generate buttons. When ON, this only applies to the scheduled Scan + Process (cron or Test Fire) — clicking Run manually never auto-generates, since Dispatcharr may still be matching newly-scanned content against providers and writing .strm files mid-match can produce bad/incomplete entries."
+    },
+    {
+      "id": "strm_include_id_tag",
+      "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): filenames are the title only, as before. ON: appends the Jellyfin/Emby external-id tag when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing .strm folder/file that has an id on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
+    },
+    {
+      "id": "strm_require_id",
+      "label": "Skip titles with no TMDB/IMDB id",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): a title with no id still gets a .strm, named from the raw provider title text alone. ON: skip generating (or remove an already-generated) .strm entirely for a title with neither id — some providers never expose one for certain content (confirmed happening for entire series catalogues on at least one provider), and a media server has nothing reliable to identify that file by regardless of how clean the title text is."
     },
     {
       "id": "_section_reprobe",

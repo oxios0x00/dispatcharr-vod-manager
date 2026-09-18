@@ -6,11 +6,11 @@ Why this module exists: Dispatcharr's own Xtream endpoints
 always collapse a title with several kept relations (one per quality
 tier, by design of this plugin) down to a single one — whichever M3U
 account has the highest priority — regardless of which category a
-client browsed through to get there (see NOTES.md point 25, verified
-with real ffprobe calls against Dispatcharr-test). A pure Xtream client
-(TiviMate, etc.) can never be steered around this; only a dedicated
-Dispatcharr core change could (see NOTES.md point 25's GitHub issue
-trail — #1443, declined PR #1500, ongoing #1610).
+client browsed through to get there (verified with real ffprobe calls
+against a live Dispatcharr instance). A pure Xtream client (TiviMate,
+etc.) can never be steered around this; only a dedicated Dispatcharr
+core change could (tracked upstream as GitHub issue #1443, declined PR
+#1500, ongoing #1610).
 
 Dispatcharr does expose a second, generic endpoint that *is*
 relation-aware: `/proxy/vod/<movie|series|episode>/<uuid>?stream_id=<id>`
@@ -43,6 +43,22 @@ def sanitize_filename(name):
     cleaned = _INVALID_CHARS.sub("", name or "").strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned or "Unknown"
+
+
+def id_tag(tmdb_id, imdb_id):
+    """The Jellyfin/Emby external-id filename tag for a title, e.g.
+    ' [tmdbid-12345]' or ' [imdbid-tt1234567]' (leading space, ready to
+    append to a title). Prefers tmdb_id; falls back to imdb_id; returns
+    '' when neither is known — a media server then has only the title
+    text to identify the file by, same as before this feature existed.
+    Plex uses a different tag ({tmdb-12345}, no 'id' suffix, curly
+    braces) — this plugin targets Emby/Jellyfin only, matching the rest
+    of the .strm generation feature."""
+    if tmdb_id:
+        return f" [tmdbid-{tmdb_id}]"
+    if imdb_id:
+        return f" [imdbid-{imdb_id}]"
+    return ""
 
 
 def build_proxy_url(base_url, content_type, uuid, stream_id):

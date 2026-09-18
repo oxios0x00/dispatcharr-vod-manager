@@ -9,8 +9,7 @@ kept relation (see strm.py), for media servers that can't get real
 multi-version playback through Dispatcharr's native Xtream API alone.
 
 Every design decision referenced in comments below was validated against
-a real Dispatcharr instance and the real Dispatcharr source — see
-NOTES.md in the project root for the full trail.
+a real Dispatcharr instance and the real Dispatcharr source.
 """
 import os
 import threading
@@ -69,9 +68,9 @@ class Plugin:
     help_url = ""
 
     # Names for the django-celery-beat PeriodicTask and the Celery task it
-    # points at — same pattern as the real, published vod2mlib plugin (see
-    # NOTES.md point 15). No formal plugin scheduling API exists in
-    # Dispatcharr; a plugin registers its own PeriodicTask directly.
+    # points at — same pattern as the real, published vod2mlib plugin. No
+    # formal plugin scheduling API exists in Dispatcharr; a plugin
+    # registers its own PeriodicTask directly.
     SCHEDULE_TASK_NAME = "vod_manager.auto_run"
     SCHEDULED_TASK_CELERY_NAME = "vod_manager.scheduled_run"
 
@@ -261,6 +260,20 @@ class Plugin:
             "type": "boolean",
             "default": False,
             "help_text": "OFF (default): only runs from the Generate buttons. When ON, this only applies to the scheduled Scan + Process (cron or Test Fire) — clicking Run manually never auto-generates, since Dispatcharr may still be matching newly-scanned content against providers and writing .strm files mid-match can produce bad/incomplete entries.",
+        },
+        {
+            "id": "strm_include_id_tag",
+            "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in filenames",
+            "type": "boolean",
+            "default": False,
+            "help_text": "OFF (default): filenames are the title only, as before. ON: appends the Jellyfin/Emby external-id tag when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing .strm folder/file that has an id on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
+        },
+        {
+            "id": "strm_require_id",
+            "label": "Skip titles with no TMDB/IMDB id",
+            "type": "boolean",
+            "default": False,
+            "help_text": "OFF (default): a title with no id still gets a .strm, named from the raw provider title text alone. ON: skip generating (or remove an already-generated) .strm entirely for a title with neither id — some providers never expose one for certain content (confirmed happening for entire series catalogues on at least one provider), and a media server has nothing reliable to identify that file by regardless of how clean the title text is.",
         },
         {
             "id": "_section_reprobe",
@@ -679,11 +692,10 @@ class Plugin:
 
         enqueued = 0
         scanned = 0
-        # Kept simple for the prototype: iterate every movie with at least
-        # one active relation. On a very large catalogue this single
-        # synchronous action call can be slow (see NOTES.md point 2 — a
-        # Celery-backed background scan is the natural next step once the
-        # core selection logic is validated on real data).
+        # Kept simple: iterate every movie with at least one active
+        # relation. On a very large catalogue this single synchronous
+        # action call can be slow — a Celery-backed background scan would
+        # be the natural next step if that becomes a real bottleneck.
         movie_ids = (
             M3UMovieRelation.objects.filter(m3u_account__is_active=True)
             .values_list("movie_id", flat=True)
@@ -874,7 +886,7 @@ class Plugin:
     # re-fetches when a relation isn't yet marked episodes_fetched, and
     # re-derives the episode list every time it runs) can catch that, and
     # only for series that get reprocessed. Documented rather than solved
-    # here; see NOTES.md.
+    # here.
 
     def _scan_series(self, settings):
         from apps.vod.models import Series, M3USeriesRelation
@@ -1237,8 +1249,8 @@ class Plugin:
     #
     # Bypasses Dispatcharr's native Xtream API entirely (it always collapses
     # a title's kept relations to whichever M3U account has the highest
-    # priority, regardless of category — verified with real ffprobe testing,
-    # see NOTES.md point 25). Each .strm is pinned to one exact relation via
+    # priority, regardless of category — verified with real ffprobe testing
+    # against the raw provider stream). Each .strm is pinned to one exact relation via
     # Dispatcharr's generic proxy endpoint instead, so Emby/Jellyfin (or any
     # media server that reads .strm files) get every kept quality tier as a
     # genuinely distinct, correctly-labelled, independently playable file.
@@ -1247,7 +1259,7 @@ class Plugin:
 
     def _generate_movie_strm(self, settings):
         from apps.vod.models import M3UMovieRelation
-        from .strm import build_proxy_url, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+        from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
         base_url = (settings.get("strm_dispatcharr_url") or "").strip()
         library_root = (settings.get("strm_library_path") or "").strip()
@@ -1258,6 +1270,8 @@ class Plugin:
             }
         subfolder = (settings.get("strm_movies_subfolder") or "Movies").strip() or "Movies"
         library_dir = os.path.join(library_root, subfolder)
+        include_id_tag = bool(settings.get("strm_include_id_tag"))
+        require_id = bool(settings.get("strm_require_id"))
 
         relations = list(
             M3UMovieRelation.objects.filter(m3u_account__is_active=True)
@@ -1270,11 +1284,19 @@ class Plugin:
         for rel in relations:
             by_movie.setdefault(rel.movie_id, []).append(rel)
 
-        created = updated = unchanged = errors = 0
+        created = updated = unchanged = errors = skipped_no_id = 0
         current_paths = set()
         for movie_relations in by_movie.values():
             movie = movie_relations[0].movie
-            safe_name = sanitize_filename(movie.name)
+            if require_id and not movie.tmdb_id and not movie.imdb_id:
+                # Not written this run, and therefore absent from
+                # current_paths below — an already-generated file for
+                # this movie gets cleaned up by the stale-file pass just
+                # like a pruned relation would be.
+                skipped_no_id += 1
+                continue
+            tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
+            safe_name = sanitize_filename(movie.name + tag)
             suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
             movie_dir = os.path.join(library_dir, safe_name)
 
@@ -1295,9 +1317,10 @@ class Plugin:
                     unchanged += 1
 
         # Anything this plugin wrote last time but didn't write again just
-        # now belongs to a relation that's been pruned or a movie that's
-        # gone entirely — safe to remove precisely because we tracked
-        # writing it ourselves, unlike scanning the folder for "any .strm".
+        # now belongs to a relation that's been pruned, a movie that's
+        # gone entirely, or a movie now skipped by "Skip titles with no
+        # id" — safe to remove precisely because we tracked writing it
+        # ourselves, unlike scanning the folder for "any .strm".
         stale = self.store.get_strm_manifest(CONTENT_TYPE_MOVIE) - current_paths
         removed = remove_stale_files(stale, stop_dir=library_dir)
         self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
@@ -1306,6 +1329,8 @@ class Plugin:
             f"{created} created, {updated} updated, {unchanged} unchanged, "
             f"{removed} removed across {len(by_movie)} movies."
         )
+        if skipped_no_id:
+            msg += f" {skipped_no_id} movie(s) skipped (no TMDB/IMDB id)."
         if errors:
             msg += f" {errors} file write error(s) — check the path is writable."
         return {"status": "ok", "message": msg}
@@ -1313,7 +1338,7 @@ class Plugin:
     def _generate_series_strm(self, settings):
         from apps.vod.models import M3UEpisodeRelation
 
-        from .strm import build_proxy_url, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+        from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
         base_url = (settings.get("strm_dispatcharr_url") or "").strip()
         library_root = (settings.get("strm_library_path") or "").strip()
@@ -1324,6 +1349,8 @@ class Plugin:
             }
         subfolder = (settings.get("strm_series_subfolder") or "Series").strip() or "Series"
         library_dir = os.path.join(library_root, subfolder)
+        include_id_tag = bool(settings.get("strm_include_id_tag"))
+        require_id = bool(settings.get("strm_require_id"))
 
         relations = list(
             M3UEpisodeRelation.objects.filter(m3u_account__is_active=True)
@@ -1339,12 +1366,20 @@ class Plugin:
         created = updated = unchanged = errors = 0
         current_paths = set()
         series_seen = set()
+        series_skipped_no_id = set()
         for episode_relations in by_episode.values():
             episode = episode_relations[0].episode
             series = episode.series
+            if require_id and not series.tmdb_id and not series.imdb_id:
+                # Same reasoning as the movie side: not written this run,
+                # so an already-generated episode file for this series
+                # gets cleaned up by the stale-file pass below.
+                series_skipped_no_id.add(series.id)
+                continue
             series_seen.add(series.id)
 
-            safe_series = sanitize_filename(series.name)
+            tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
+            safe_series = sanitize_filename(series.name + tag)
             season_num = episode.season_number or 1
             episode_num = episode.episode_number or 0
             base_filename = f"{safe_series} - S{season_num:02d}E{episode_num:02d}"
@@ -1376,6 +1411,8 @@ class Plugin:
             f"{created} created, {updated} updated, {unchanged} unchanged, "
             f"{removed} removed across {len(series_seen)} series."
         )
+        if series_skipped_no_id:
+            msg += f" {len(series_skipped_no_id)} series skipped (no TMDB/IMDB id)."
         if errors:
             msg += f" {errors} file write error(s) — check the path is writable."
         return {"status": "ok", "message": msg}
@@ -1431,9 +1468,9 @@ class Plugin:
 
     def _reprobe_by_stream_id(self, settings):
         """Targeted fix for a provider silently swapping the file behind a
-        stream_id after this plugin already probed and classified it (real
-        incident — see NOTES.md): clears just that one relation's cached
-        probe and re-queues its movie/series, without touching anything
+        stream_id after this plugin already probed and classified it (a
+        real incident, not theoretical): clears just that one relation's
+        cached probe and re-queues its movie/series, without touching anything
         else in the catalogue. Does not itself re-probe — Process Batch /
         Process Series Batch does that on the next click, same as any other
         queued title."""
@@ -1487,8 +1524,8 @@ class Plugin:
     # apps/plugins/loader.py — no schedule-related method). Dispatcharr
     # itself runs on Celery + django-celery-beat internally (M3U/EPG
     # refresh, backups), so a plugin can register its own PeriodicTask
-    # directly. Same pattern as the real, published vod2mlib plugin (see
-    # NOTES.md point 15). Settings are snapshotted into the PeriodicTask's
+    # directly. Same pattern as the real, published vod2mlib plugin.
+    # Settings are snapshotted into the PeriodicTask's
     # kwargs at Apply time, not read live — re-click Apply after changing
     # any other setting to refresh what the scheduled run actually uses.
 
