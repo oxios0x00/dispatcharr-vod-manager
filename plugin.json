@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest \u2014 with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
