@@ -36,14 +36,25 @@ exercised for real on a live catalogue, not just unit-tested.
 1. Leave **Dry run** ON (the default).
 2. Set **Batch size** small (5-10) for the first pass.
 3. Click **Scan Movies** — enqueues movies whose relation set is new.
-4. Click **Process Batch** a few times, then **Queue Status** to check
-   progress.
+   Only needs to be clicked again once new content actually shows up;
+   re-running it against an unchanged catalogue enqueues nothing.
+4. Click **Process Batch** repeatedly, checking **Queue Status** between
+   clicks, until it reads `pending=0 in_progress=0`. Each click only
+   drains one batch (Batch size), not the whole queue — on a large
+   catalogue this can take many clicks.
 5. Inspect what it *would* prune (check Dispatcharr's own logs / the
    plugin's `state.sqlite3` `relation_probes` table) before trusting it.
 6. Only turn **Dry run** OFF once the picks look right on a sample you've
    checked by hand — pruning deletes real `M3UMovieRelation` rows.
    Deletion, not a soft flag, is the only lever Dispatcharr's plugin API
    actually gives us for removing a relation from its own catalogue.
+7. Once the queue is fully drained, run **Clean Titles**, then
+   **Generate Movie .strm Files** — in that order. Cleaning titles after
+   generating `.strm` files just means regenerating with different
+   names right after; cleaning first avoids the redundant write.
+
+Same sequence for series, with the `[SERIES]` actions and **Series
+Queue Status**.
 
 ## .strm generation (Emby/Jellyfin, real multi-version playback)
 
@@ -81,6 +92,14 @@ removed automatically on the next run — tracked by this plugin itself
 folder contents, so anything you added by hand (NFOs, posters, your own
 files) is never touched.
 
+Both Generate actions **refuse to run at all** while their queue
+(Movies or Series) still has anything `pending` or `in_progress` —
+generating too early would give a still-unprobed title a `- unprobed`
+filename and write a file for a relation that's about to be pruned,
+both of which just get renamed/deleted again on the next Generate once
+processing catches up. Finish Process Batch (or Process Series Batch)
+down to `0 pending, 0 in_progress` first.
+
 Two more settings, both OFF by default:
 
 - **Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series
@@ -115,6 +134,14 @@ task at its own process startup (`worker_process_init` in
 silently but the task never actually fires, and **Schedule Status** stays
 stuck at "last run: never" forever. Use **Test Fire Schedule Now** after
 a restart to confirm it's picked up before trusting the cron.
+
+**Warning**: leave **Schedule (5-field cron)** empty (the default)
+during a first import or against a large catalogue. Run Scan, Process
+Batch, Clean Titles and Generate manually and watch the results until
+the queues settle down — an unattended cron firing every few hours
+during that period gives you far less visibility into what's happening
+on a catalogue you haven't validated yet. Schedule it only once you
+trust the picks it's making on their own.
 
 ## Data location
 

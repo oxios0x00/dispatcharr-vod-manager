@@ -224,7 +224,13 @@ class Plugin:
                 "Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, "
                 "Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a "
                 "pruned/removed relation's file is deleted automatically (only files this plugin tracks — "
-                "nothing added by hand is touched)."
+                "nothing added by hand is touched). Recommended order: Scan, then Process Batch repeatedly "
+                "until Queue Status reads 0 pending and 0 in progress, then Clean Titles, then Generate. "
+                "Both Generate actions refuse to run at all while their queue still has pending or "
+                "in-progress items, precisely to prevent that ordering mistake — generating too early would "
+                "give unprobed titles a '- unprobed' filename and write files for relations about to be "
+                "pruned, both of which get silently cleaned up (renamed/deleted) on the next Generate anyway, "
+                "so nothing is gained by rushing it."
             ),
         },
         {
@@ -296,7 +302,7 @@ class Plugin:
             "id": "_section_schedule",
             "label": "[SCHEDULE]",
             "type": "info",
-            "description": "Runs on its own cron, independent of Dispatcharr's own refresh. To activate: 1) fill in Schedule (cron), Schedule timezone, and Scheduled action below, 2) click the [SCHEDULE] Apply action — this registers the schedule but does not run it yet, 3) after installing or updating this plugin, restart Dispatcharr once (a Celery worker only picks up a newly-registered scheduled task at its own startup — Apply succeeding is not enough on its own). Use [SCHEDULE] Test Fire Now to run it immediately and confirm it's wired up, and [SCHEDULE] Status to check when it last actually ran. Re-click Apply any time you change Schedule/timezone/action or any setting the scheduled run itself should use — settings are snapshotted at Apply time, not read live.",
+            "description": "Runs on its own cron, independent of Dispatcharr's own refresh. To activate: 1) fill in Schedule (cron), Schedule timezone, and Scheduled action below, 2) click the [SCHEDULE] Apply action — this registers the schedule but does not run it yet, 3) after installing or updating this plugin, restart Dispatcharr once (a Celery worker only picks up a newly-registered scheduled task at its own startup — Apply succeeding is not enough on its own). Use [SCHEDULE] Test Fire Now to run it immediately and confirm it's wired up, and [SCHEDULE] Status to check when it last actually ran. Re-click Apply any time you change Schedule/timezone/action or any setting the scheduled run itself should use — settings are snapshotted at Apply time, not read live. Warning: leave the cron unset (Schedule left empty) during a first import or against a large catalogue — run Scan/Process/Clean Titles/Generate manually and watch the results until the queues settle down, then schedule it once you're confident in the picks it's making unattended.",
         },
         {
             "id": "schedule_cron",
@@ -394,7 +400,7 @@ class Plugin:
         {
             "id": "generate_movie_strm",
             "label": "[MOVIES] Generate .strm Files",
-            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings).",
+            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items — finish Process Batch first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -458,7 +464,7 @@ class Plugin:
         {
             "id": "generate_series_strm",
             "label": "[SERIES] Generate .strm Files",
-            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings).",
+            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items — finish Process Series Batch first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -1268,6 +1274,18 @@ class Plugin:
                 "status": "error",
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
             }
+        queue = self.store.queue_counts(CONTENT_TYPE_MOVIE)
+        if queue["pending"] or queue["in_progress"]:
+            return {
+                "status": "error",
+                "message": (
+                    f"{queue['pending']} movie(s) pending, {queue['in_progress']} in progress — "
+                    "finish Process Batch first (Queue Status should read 0 pending and 0 in "
+                    "progress). Generating now would give still-unprobed titles a '- unprobed' "
+                    "filename and write a file for a relation that's about to be pruned, only for "
+                    "it to disappear on the next Generate run."
+                ),
+            }
         subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
         library_dir = os.path.join(library_root, subfolder)
         include_id_tag = bool(settings.get("strm_include_id_tag"))
@@ -1349,6 +1367,18 @@ class Plugin:
             return {
                 "status": "error",
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
+            }
+        queue = self.store.queue_counts(CONTENT_TYPE_SERIES)
+        if queue["pending"] or queue["in_progress"]:
+            return {
+                "status": "error",
+                "message": (
+                    f"{queue['pending']} series pending, {queue['in_progress']} in progress — "
+                    "finish Process Series Batch first (Series Queue Status should read 0 pending "
+                    "and 0 in progress). Generating now would give still-unprobed titles a "
+                    "'- unprobed' filename and write a file for a relation that's about to be "
+                    "pruned, only for it to disappear on the next Generate run."
+                ),
             }
         subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
         library_dir = os.path.join(library_root, subfolder)
