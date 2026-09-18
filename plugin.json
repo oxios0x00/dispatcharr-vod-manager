@@ -1,0 +1,466 @@
+{
+  "name": "VOD Manager",
+  "version": "0.1.0",
+  "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest \u2014 with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
+  "author": "oxios0x00",
+  "license": "MIT",
+  "fields": [
+    {
+      "id": "dry_run",
+      "label": "Dry run (log decisions, don't delete anything)",
+      "type": "boolean",
+      "default": true,
+      "help_text": "ON: probes and decides winners but never deletes anything. Turn OFF once a test batch looks right \u2014 pruning is a real delete, only recoverable via Dispatcharr's own next refresh."
+    },
+    {
+      "id": "target_qualities",
+      "label": "Qualities to keep (one winner per tier)",
+      "type": "string",
+      "default": "2160p,1080p",
+      "help_text": "Comma-separated, best first. Keeps one relation per listed tier the title actually has (e.g. one 2160p + one 1080p), never eliminates a title for lacking a tier. If none of the tiers match, falls back to the best quality available."
+    },
+    {
+      "id": "target_languages",
+      "label": "Target languages (ISO 639-2, e.g. fre,eng)",
+      "type": "string",
+      "default": "fre,eng",
+      "help_text": "Comma-separated. Keeps the fewest relations whose audio languages together cover this set."
+    },
+    {
+      "id": "exclude_unmatched_language",
+      "label": "Exclude relations matching none of the target languages",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely \u2014 can leave a title with nothing kept if no tier matches."
+    },
+    {
+      "id": "batch_size",
+      "label": "Batch size (movies per click)",
+      "type": "number",
+      "default": 25,
+      "min": 1,
+      "help_text": "Start small (5-25) to validate before scaling up."
+    },
+    {
+      "id": "max_concurrent_probes",
+      "label": "Max concurrent probes",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "help_text": "Stay below your provider's connection limit \u2014 probing uses a real stream connection."
+    },
+    {
+      "id": "max_probes_per_second",
+      "label": "Max probes started per second",
+      "type": "number",
+      "default": 1,
+      "min": 0,
+      "help_text": "Caps launch rate independently of concurrency."
+    },
+    {
+      "id": "circuit_breaker_error_ratio",
+      "label": "Auto-pause queue if error ratio exceeds",
+      "type": "number",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "help_text": "Pauses the queue once this fraction of a batch fails, instead of hammering a struggling provider."
+    },
+    {
+      "id": "_section_series",
+      "label": "[SERIES]",
+      "type": "info",
+      "description": "Same probe/select/prune pipeline as Films, per episode. Uses the same quality/language/dry-run/concurrency settings above."
+    },
+    {
+      "id": "series_batch_size",
+      "label": "Batch size (series per click)",
+      "type": "number",
+      "default": 5,
+      "min": 1,
+      "help_text": "Smaller than the Films batch size \u2014 one series can fan out into dozens of episodes."
+    },
+    {
+      "id": "episode_sampling",
+      "label": "Episode sampling",
+      "type": "select",
+      "default": "first_only",
+      "options": [
+        {
+          "value": "first_only",
+          "label": "Probe first episode per season, apply to the rest (recommended)"
+        },
+        {
+          "value": "sample_n",
+          "label": "Probe first N episodes per season (see setting below)"
+        },
+        {
+          "value": "all",
+          "label": "Probe every episode individually"
+        }
+      ],
+      "help_text": "Probing every episode is slow on long shows. 'First only' assumes a season is encoded consistently; 'Probe first N' verifies that assumption before extrapolating, falling back to per-episode probing if a season turns out inconsistent."
+    },
+    {
+      "id": "episode_sample_size",
+      "label": "Episodes to probe per season (if sampling = 'Probe first N')",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "help_text": "Higher = more confidence a season is consistently encoded, at the cost of more probes."
+    },
+    {
+      "id": "_section_title_cleanup",
+      "label": "[TITLE CLEANUP]",
+      "type": "info",
+      "description": "Cosmetic only \u2014 strips junk prefixes from titles (e.g. 'NF - The Matrix' \u2192 'The Matrix'). Never affects quality/language selection."
+    },
+    {
+      "id": "title_cleanup_tags",
+      "label": "Tags to strip (one per line)",
+      "type": "text",
+      "default": "NF -\nTOP -\n4K-FR -\nAMZ -\nFR -\nFR .\nD+ -\nD+  -\nUNV -\n4K-NF -\nPRMT -\n4K-AMZ -\n4K-D+ -\n4K-FR-HDR -\n4K-FR-\nA+ -\nA+\n4K-A+ -\n4K-MRVL -\nDWA -\n007 -\nK-FR -\nAR-SUBS -\n4M-AMZ -\n4K-",
+      "help_text": "Literal prefixes, matched case-insensitively at the start of the title. Longest match wins; stacked tags are stripped repeatedly."
+    },
+    {
+      "id": "auto_clean_titles",
+      "label": "Run title cleanup automatically with Scan + Process",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): only runs from the Clean Titles buttons or its own scheduled action."
+    },
+    {
+      "id": "_section_strm",
+      "label": "[.STRM OUTPUT]",
+      "type": "info",
+      "description": "Dispatcharr's Xtream API always serves whichever relation's M3U account has the highest priority, regardless of category \u2014 a plain IPTV client can't select a specific quality tier. Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a pruned/removed relation's file is deleted automatically (only files this plugin tracks \u2014 nothing added by hand is touched)."
+    },
+    {
+      "id": "strm_dispatcharr_url",
+      "label": "Dispatcharr base URL (baked into every .strm)",
+      "type": "string",
+      "default": "",
+      "placeholder": "http://192.168.1.94:9292",
+      "help_text": "Must be reachable from your media server, not just from Dispatcharr \u2014 a LAN IP/hostname, not 'localhost'."
+    },
+    {
+      "id": "strm_library_path",
+      "label": "Library root path (inside this container)",
+      "type": "string",
+      "default": "/data/strm",
+      "help_text": "Mount this same path into your media server so it can see the generated files."
+    },
+    {
+      "id": "strm_movies_subfolder",
+      "label": "Movies subfolder name",
+      "type": "string",
+      "default": "Movies"
+    },
+    {
+      "id": "strm_series_subfolder",
+      "label": "Series subfolder name",
+      "type": "string",
+      "default": "Series"
+    },
+    {
+      "id": "auto_generate_strm",
+      "label": "Run .strm generation automatically with Scan + Process",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): only runs from the Generate buttons or its own scheduled action."
+    },
+    {
+      "id": "_section_reprobe",
+      "label": "[TARGETED RE-PROBE]",
+      "type": "info",
+      "description": "A relation is only ever probed once and trusted forever \u2014 if a provider swaps the file behind a stream_id without changing it (confirmed happening for real), the cached quality can go stale silently. Fixes just the one relation you point at, not the whole catalogue."
+    },
+    {
+      "id": "reprobe_stream_id",
+      "label": "Stream ID to force re-probe",
+      "type": "string",
+      "default": "",
+      "help_text": "Copy from a .strm file's URL (?stream_id=...). Works for both movie and episode relations."
+    },
+    {
+      "id": "_section_schedule",
+      "label": "[SCHEDULE]",
+      "type": "info",
+      "description": "Runs on its own cron, independent of Dispatcharr's own refresh. Click 'Apply Schedule' again after changing any other setting."
+    },
+    {
+      "id": "schedule_cron",
+      "label": "Schedule (5-field cron)",
+      "type": "string",
+      "default": "0 */6 * * *",
+      "help_text": "'minute hour day-of-month month day-of-week'. Default = every 6 hours."
+    },
+    {
+      "id": "schedule_timezone",
+      "label": "Schedule timezone",
+      "type": "string",
+      "default": "",
+      "placeholder": "Europe/Paris",
+      "help_text": "IANA timezone name. Leave empty to use UTC."
+    },
+    {
+      "id": "schedule_target",
+      "label": "Scheduled action",
+      "type": "select",
+      "default": "scan_and_process",
+      "options": [
+        {
+          "value": "scan_and_process",
+          "label": "Scan + Process Batch (recommended)"
+        },
+        {
+          "value": "scan_movies",
+          "label": "Scan Movies only"
+        },
+        {
+          "value": "process_batch",
+          "label": "Process Batch only"
+        },
+        {
+          "value": "clean_movie_titles",
+          "label": "Clean Movie Titles only"
+        },
+        {
+          "value": "clean_series_titles",
+          "label": "Clean Series Titles only"
+        },
+        {
+          "value": "scan_and_process_series",
+          "label": "Scan + Process Series (recommended)"
+        },
+        {
+          "value": "scan_series",
+          "label": "Scan Series only"
+        },
+        {
+          "value": "process_series",
+          "label": "Process Series Batch only"
+        },
+        {
+          "value": "generate_movie_strm",
+          "label": "Generate Movie .strm Files only"
+        },
+        {
+          "value": "generate_series_strm",
+          "label": "Generate Series .strm Files only"
+        }
+      ],
+      "help_text": "Which action the scheduler runs on each tick."
+    }
+  ],
+  "actions": [
+    {
+      "id": "scan_and_process",
+      "label": "[MOVIES] Scan + Process",
+      "description": "One click: scan for changed movies, then probe/select/prune the batch.",
+      "button_label": "Run",
+      "button_variant": "filled",
+      "button_color": "green"
+    },
+    {
+      "id": "scan_movies",
+      "label": "[MOVIES] Scan",
+      "description": "Enqueue movies whose M3U relations changed since last pass.",
+      "button_label": "Scan",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "process_batch",
+      "label": "[MOVIES] Process Batch",
+      "description": "Probe + select + (unless Dry Run) prune the next queued batch.",
+      "button_label": "Process",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "queue_status",
+      "label": "[MOVIES] Queue Status",
+      "description": "Pending/in-progress/done/error counts and the last run.",
+      "button_label": "Status",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "pause_queue",
+      "label": "[MOVIES] Pause Queue",
+      "description": "Stop Process Batch until resumed.",
+      "button_label": "Pause",
+      "button_variant": "outline",
+      "button_color": "orange"
+    },
+    {
+      "id": "resume_queue",
+      "label": "[MOVIES] Resume Queue",
+      "description": "Clear a pause (manual or circuit-breaker).",
+      "button_label": "Resume",
+      "button_variant": "outline",
+      "button_color": "teal"
+    },
+    {
+      "id": "clean_movie_titles",
+      "label": "[MOVIES] Clean Titles",
+      "description": "Strip configured junk prefixes from movie titles (uses Dry Run).",
+      "button_label": "Clean Titles",
+      "button_variant": "outline",
+      "button_color": "grape"
+    },
+    {
+      "id": "generate_movie_strm",
+      "label": "[MOVIES] Generate .strm Files",
+      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings).",
+      "button_label": "Generate",
+      "button_variant": "outline",
+      "button_color": "cyan"
+    },
+    {
+      "id": "scan_and_process_series",
+      "label": "[SERIES] Scan + Process",
+      "description": "One click: scan for changed series, then probe/select/prune per episode.",
+      "button_label": "Run",
+      "button_variant": "filled",
+      "button_color": "green"
+    },
+    {
+      "id": "scan_series",
+      "label": "[SERIES] Scan",
+      "description": "Enqueue series whose M3U relations changed since last pass.",
+      "button_label": "Scan",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "process_series",
+      "label": "[SERIES] Process Batch",
+      "description": "Fetch each queued series' episodes if needed, then probe/select/prune.",
+      "button_label": "Process",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "series_queue_status",
+      "label": "[SERIES] Queue Status",
+      "description": "Pending/in-progress/done/error counts and the last run, for series.",
+      "button_label": "Status",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "pause_series_queue",
+      "label": "[SERIES] Pause Queue",
+      "description": "Stop Process Series Batch until resumed. Independent of the Movies pause.",
+      "button_label": "Pause",
+      "button_variant": "outline",
+      "button_color": "orange"
+    },
+    {
+      "id": "resume_series_queue",
+      "label": "[SERIES] Resume Queue",
+      "description": "Clear a pause (manual or circuit-breaker) on the series queue.",
+      "button_label": "Resume",
+      "button_variant": "outline",
+      "button_color": "teal"
+    },
+    {
+      "id": "clean_series_titles",
+      "label": "[SERIES] Clean Titles",
+      "description": "Strip configured junk prefixes from series titles (uses Dry Run).",
+      "button_label": "Clean Titles",
+      "button_variant": "outline",
+      "button_color": "grape"
+    },
+    {
+      "id": "generate_series_strm",
+      "label": "[SERIES] Generate .strm Files",
+      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings).",
+      "button_label": "Generate",
+      "button_variant": "outline",
+      "button_color": "cyan"
+    },
+    {
+      "id": "catalog_stats",
+      "label": "[MAINTENANCE] Catalog Stats",
+      "description": "Snapshot kept movies/series by quality tier. Also runs automatically after Scan + Process.",
+      "button_label": "Stats",
+      "button_variant": "outline",
+      "button_color": "grape"
+    },
+    {
+      "id": "reprobe_by_stream_id",
+      "label": "[MAINTENANCE] Force Re-probe by Stream ID",
+      "description": "Clears the cached probe for one relation (movie or episode) and re-queues its title, using the Stream ID above. Click Process Batch/Series afterward to actually redo it.",
+      "button_label": "Re-probe",
+      "button_variant": "outline",
+      "button_color": "orange"
+    },
+    {
+      "id": "delete_strm_files",
+      "label": "[MAINTENANCE] Delete .strm Files",
+      "description": "Deletes every generated .strm (movies and series) and clears the manifest. Real files, real delete.",
+      "button_label": "Delete",
+      "button_variant": "outline",
+      "button_color": "red",
+      "confirm": {
+        "required": true,
+        "title": "Delete every .strm file?",
+        "message": "Removes all files under the configured Movies/Series .strm subfolders. Your media server will lose them until the next Generate. This does not touch Dispatcharr's own catalogue."
+      }
+    },
+    {
+      "id": "reset_plugin_state",
+      "label": "[MAINTENANCE] Reset Plugin State",
+      "description": "Wipes the probe cache, queues, known relations, run history and catalog stats \u2014 starts fresh on the next Scan/Process.",
+      "button_label": "Reset",
+      "button_variant": "outline",
+      "button_color": "red",
+      "confirm": {
+        "required": true,
+        "title": "Reset all plugin state?",
+        "message": "Clears every probe result and queue this plugin has recorded \u2014 the next Process Batch/Series will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched."
+      }
+    },
+    {
+      "id": "apply_schedule",
+      "label": "[SCHEDULE] Apply",
+      "description": "Register or update the periodic task from the [SCHEDULE] settings.",
+      "button_label": "Apply",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "remove_schedule",
+      "label": "[SCHEDULE] Remove",
+      "description": "Unregister the periodic task.",
+      "button_label": "Remove",
+      "button_variant": "outline",
+      "button_color": "orange",
+      "confirm": {
+        "required": true,
+        "title": "Remove the schedule?",
+        "message": "Unregisters the periodic task. You can re-create it any time with Apply Schedule."
+      }
+    },
+    {
+      "id": "schedule_status",
+      "label": "[SCHEDULE] Status",
+      "description": "Whether a schedule is registered and when it last ran.",
+      "button_label": "Status",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "test_fire_schedule",
+      "label": "[SCHEDULE] Test Fire Now",
+      "description": "Runs the scheduled action immediately, bypassing the cron timer.",
+      "button_label": "Test Fire",
+      "button_variant": "outline",
+      "button_color": "grape"
+    }
+  ]
+}

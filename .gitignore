@@ -1,0 +1,12 @@
+# Build artifact, regeneratable from source
+vod_manager.zip
+
+# Per-install runtime state (probe cache, queue, run log) — never source
+vod_manager_data/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
