@@ -122,3 +122,7 @@ State lives in `<plugin folder>/data/state.sqlite3` by default (override
 with the `VOD_MANAGER_DATA_DIR` env var). It holds the probe cache, the
 processing queue, and run history — nothing here is tracked by
 Dispatcharr's own database or migrations.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
