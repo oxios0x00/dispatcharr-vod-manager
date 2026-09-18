@@ -99,8 +99,7 @@ a restart to confirm it's picked up before trusting the cron.
 
 ## Data location
 
-State lives in `<plugin folder>/../vod_manager_data/state.sqlite3` by
-default (override with the `VOD_MANAGER_DATA_DIR` env var). It holds the
-probe cache, the processing queue, and run history — nothing here is
-tracked by Dispatcharr's own database or migrations (see NOTES.md
-point 4 for why).
+State lives in `<plugin folder>/data/state.sqlite3` by default (override
+with the `VOD_MANAGER_DATA_DIR` env var). It holds the probe cache, the
+processing queue, and run history — nothing here is tracked by
+Dispatcharr's own database or migrations.
