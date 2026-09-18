@@ -246,13 +246,13 @@ class Plugin:
             "id": "strm_movies_subfolder",
             "label": "Movies subfolder name",
             "type": "string",
-            "default": "Movies",
+            "default": "movies",
         },
         {
             "id": "strm_series_subfolder",
             "label": "Series subfolder name",
             "type": "string",
-            "default": "Series",
+            "default": "series",
         },
         {
             "id": "auto_generate_strm",
@@ -296,14 +296,14 @@ class Plugin:
             "id": "_section_schedule",
             "label": "[SCHEDULE]",
             "type": "info",
-            "description": "Runs on its own cron, independent of Dispatcharr's own refresh. Click 'Apply Schedule' again after changing any other setting.",
+            "description": "Runs on its own cron, independent of Dispatcharr's own refresh. To activate: 1) fill in Schedule (cron), Schedule timezone, and Scheduled action below, 2) click the [SCHEDULE] Apply action — this registers the schedule but does not run it yet, 3) after installing or updating this plugin, restart Dispatcharr once (a Celery worker only picks up a newly-registered scheduled task at its own startup — Apply succeeding is not enough on its own). Use [SCHEDULE] Test Fire Now to run it immediately and confirm it's wired up, and [SCHEDULE] Status to check when it last actually ran. Re-click Apply any time you change Schedule/timezone/action or any setting the scheduled run itself should use — settings are snapshotted at Apply time, not read live.",
         },
         {
             "id": "schedule_cron",
             "label": "Schedule (5-field cron)",
             "type": "string",
-            "default": "0 */6 * * *",
-            "help_text": "'minute hour day-of-month month day-of-week'. Default = every 6 hours.",
+            "default": "",
+            "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked.",
         },
         {
             "id": "schedule_timezone",
@@ -1268,7 +1268,7 @@ class Plugin:
                 "status": "error",
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
             }
-        subfolder = (settings.get("strm_movies_subfolder") or "Movies").strip() or "Movies"
+        subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
         library_dir = os.path.join(library_root, subfolder)
         include_id_tag = bool(settings.get("strm_include_id_tag"))
         require_id = bool(settings.get("strm_require_id"))
@@ -1350,7 +1350,7 @@ class Plugin:
                 "status": "error",
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
             }
-        subfolder = (settings.get("strm_series_subfolder") or "Series").strip() or "Series"
+        subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
         library_dir = os.path.join(library_root, subfolder)
         include_id_tag = bool(settings.get("strm_include_id_tag"))
         require_id = bool(settings.get("strm_require_id"))
@@ -1434,8 +1434,8 @@ class Plugin:
         library_root = (settings.get("strm_library_path") or "").strip()
         if not library_root:
             return {"status": "error", "message": "Set 'Library root path' in [.STRM OUTPUT] first."}
-        movies_subfolder = (settings.get("strm_movies_subfolder") or "Movies").strip() or "Movies"
-        series_subfolder = (settings.get("strm_series_subfolder") or "Series").strip() or "Series"
+        movies_subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
+        series_subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
 
         cleared = []
         for subfolder in (movies_subfolder, series_subfolder):
