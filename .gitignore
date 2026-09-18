@@ -7,6 +7,14 @@ vod_manager_data/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # macOS
 .DS_Store
+
+# Personal working notes and reference material — not part of the plugin repo
+NOTES.md
+SPEC.md
+CATALOG_SNAPSHOT_*.md
+reference/
+.git-old-vod-manager-backup/
