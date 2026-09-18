@@ -38,6 +38,8 @@ Re-running is safe and cheap either way: unchanged files are left alone (mtime p
 
 Both Generate actions **refuse to run at all** while their queue (Movies or Series) still has anything `pending` or `in_progress` — generating too early would give a still-unprobed title a `- unprobed` filename and write a file for a relation that's about to be pruned, both of which just get renamed/deleted again on the next Generate once processing catches up. Finish Process Batch (or Process Series Batch) down to `0 pending, 0 in_progress` first.
 
+Process Batch, Scan + Process and both Generate actions (movies and series alike) also refuse to start a second time while an earlier click on that same action is still running — see [Known limitation: long batches can time out the browser](#known-limitation-long-batches-can-time-out-the-browser) below for why that matters. A lock left behind by a Dispatcharr restart mid-batch clears itself automatically after an hour, so this never needs a manual reset.
+
 Two more settings, both OFF by default:
 
 - **Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name** — appends the Jellyfin/Emby external-id tag to the movie or series folder (not the `.strm` files inside it — they'd all share the same id, so repeating it there would be pure redundancy) when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text alone. Falls back to the plain title when neither id is known. Turning this on renames every existing tagged folder on the next Generate run — a deliberate, one-time, library-wide rename (the stale-file cleanup above removes the old paths automatically), not something to flip on a library your media server is actively serving without expecting that.
@@ -50,6 +52,10 @@ Uses django-celery-beat directly (no formal plugin scheduling API exists in Disp
 **Important**: after installing or updating this plugin, restart Dispatcharr once. A Celery worker only registers a plugin's scheduled task at its own process startup (`worker_process_init` in `dispatcharr/celery.py`) — without a restart, **Apply Schedule** succeeds silently but the task never actually fires, and **Schedule Status** stays stuck at "last run: never" forever. Use **Test Fire Schedule Now** after a restart to confirm it's picked up before trusting the cron.
 
 **Warning**: leave **Schedule (5-field cron)** empty (the default) during a first import or against a large catalogue. Run Scan, Process Batch, Clean Titles and Generate manually and watch the results until the queues settle down — an unattended cron firing every few hours during that period gives you far less visibility into what's happening on a catalogue you haven't validated yet. Schedule it only once you trust the picks it's making on their own.
+
+## Known limitation: long batches can time out the browser
+
+Process Batch, Scan + Process and both Generate actions run synchronously inside Dispatcharr's own web request/response cycle — the click blocks until the whole batch is done, there's no background-task version yet. Dispatcharr's own nginx/uwsgi timeouts are generous (5-10 minutes), but a large batch (or one hitting several dead streams — each `ffprobe` call can take up to its own 25s timeout) can still exceed that. When it does, the browser shows a timeout error even though the batch keeps running and completes correctly server-side — check Queue Status (or Series Queue Status) a minute later and it'll show the real, up-to-date counts regardless of what the browser displayed. Re-clicking because of that error is safe (see above, it'll just say the previous one is still running) but doesn't make it finish any faster. If this happens often, lower Batch size (or Series batch size) until a batch reliably finishes within the timeout window.
 
 ## Data location
 

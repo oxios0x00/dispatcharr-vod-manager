@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS strm_manifest (
     path TEXT NOT NULL,
     PRIMARY KEY (content_type, path)
 );
+
+-- One row per named action currently "in flight", so a second uwsgi worker
+-- picking up a re-clicked/retried request can tell a batch is still
+-- running instead of starting a duplicate one on top of it (see
+-- try_acquire_lock below).
+CREATE TABLE IF NOT EXISTS run_locks (
+    name TEXT PRIMARY KEY,
+    started_at REAL NOT NULL,
+    pid INTEGER
+);
 """
 
 
@@ -514,11 +524,43 @@ class Store:
                 [(content_type, p) for p in paths],
             )
 
+    # --- run_locks (stop a re-clicked/retried action piling onto a still- -
+    # running one, across separate uwsgi worker processes) ---------------
+
+    def try_acquire_lock(self, name, stale_after=3600):
+        """Atomically claim a named lock. A lock older than stale_after
+        seconds is treated as abandoned — e.g. Dispatcharr was restarted
+        while the action that held it was still running — so a crash can
+        never permanently block this action; it self-heals on its own
+        instead of needing a manual reset. Race-free across processes: the
+        INSERT...ON CONFLICT...WHERE runs as one statement under SQLite's
+        own writer lock, so two workers racing to acquire can't both win.
+        Returns (acquired, held_since) — held_since is the current
+        holder's start time when acquisition fails, None otherwise."""
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO run_locks (name, started_at, pid) VALUES (?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET started_at = excluded.started_at, "
+                "pid = excluded.pid WHERE run_locks.started_at < ?",
+                (name, now, os.getpid(), now - stale_after),
+            )
+            row = conn.execute(
+                "SELECT started_at, pid FROM run_locks WHERE name = ?", (name,)
+            ).fetchone()
+            acquired = row is not None and row["started_at"] == now and row["pid"] == os.getpid()
+            return acquired, (None if acquired else row["started_at"])
+
+    def release_lock(self, name):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM run_locks WHERE name = ?", (name,))
+
     # --- full reset ------------------------------------------------------
 
     _ALL_TABLES = (
         "probe_queue", "known_relations", "relation_probes",
         "plugin_state", "run_log", "catalog_stats", "strm_manifest",
+        "run_locks",
     )
 
     def reset_all(self):

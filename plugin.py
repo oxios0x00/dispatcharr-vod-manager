@@ -57,7 +57,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.1"
+    version = "1.0.2"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -344,7 +344,7 @@ class Plugin:
         {
             "id": "scan_and_process",
             "label": "[MOVIES] Scan + Process",
-            "description": "One click: scan for changed movies, then probe/select/prune the batch.",
+            "description": "One click: scan for changed movies, then probe/select/prune the batch. Refuses to start a second one while an earlier click is still processing.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -360,7 +360,7 @@ class Plugin:
         {
             "id": "process_batch",
             "label": "[MOVIES] Process Batch",
-            "description": "Probe + select + (unless Dry Run) prune the next queued batch.",
+            "description": "Probe + select + (unless Dry Run) prune the next queued batch. Refuses to start a second one while an earlier click is still processing.",
             "button_label": "Process",
             "button_variant": "outline",
             "button_color": "blue",
@@ -400,7 +400,7 @@ class Plugin:
         {
             "id": "generate_movie_strm",
             "label": "[MOVIES] Generate .strm Files",
-            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items — finish Process Batch first.",
+            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Batch first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -408,7 +408,7 @@ class Plugin:
         {
             "id": "scan_and_process_series",
             "label": "[SERIES] Scan + Process",
-            "description": "One click: scan for changed series, then probe/select/prune per episode.",
+            "description": "One click: scan for changed series, then probe/select/prune per episode. Refuses to start a second one while an earlier click is still processing.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -424,7 +424,7 @@ class Plugin:
         {
             "id": "process_series",
             "label": "[SERIES] Process Batch",
-            "description": "Fetch each queued series' episodes if needed, then probe/select/prune.",
+            "description": "Fetch each queued series' episodes if needed, then probe/select/prune. Refuses to start a second one while an earlier click is still processing.",
             "button_label": "Process",
             "button_variant": "outline",
             "button_color": "blue",
@@ -464,7 +464,7 @@ class Plugin:
         {
             "id": "generate_series_strm",
             "label": "[SERIES] Generate .strm Files",
-            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items — finish Process Series Batch first.",
+            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Series Batch first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -618,6 +618,26 @@ class Plugin:
             return self._test_fire_schedule(settings)
         return {"status": "error", "message": f"Unknown action '{action_id}'"}
 
+    def _busy_lock_message(self, human_name, held_since):
+        """A re-click or an automatic retry landed on a second uwsgi worker
+        while the first invocation was still running — without this, both
+        would run to completion in parallel, each pinning its own worker
+        for the whole batch, which is exactly what starved every other
+        worker and made the whole UI look frozen during the 2026-09-18
+        production incident. held_since comes from Store.try_acquire_lock;
+        the message doubles as an explanation for why a fresh restart
+        doesn't need a manual unlock (see that method's stale_after)."""
+        elapsed = int(time.time() - held_since) if held_since else 0
+        return {
+            "status": "error",
+            "message": (
+                f"{human_name} is already running (started {elapsed}s ago) — wait for it to "
+                "finish, or check Queue Status for progress, before starting another. If "
+                "Dispatcharr restarted while one was running, this clears itself automatically "
+                "after an hour."
+            ),
+        }
+
     def _scan_and_process(self, settings, scheduled=False):
         parts = []
         if settings.get("auto_clean_titles"):
@@ -731,63 +751,69 @@ class Plugin:
     # --- process batch ------------------------------------------------------
 
     def _process_batch(self, settings):
-        if self.store.is_paused(CONTENT_TYPE_MOVIE):
-            return {"status": "ok", "message": "Queue is paused — resume it to process."}
+        acquired, held_since = self.store.try_acquire_lock("process_movie_batch")
+        if not acquired:
+            return self._busy_lock_message("A movie batch", held_since)
+        try:
+            if self.store.is_paused(CONTENT_TYPE_MOVIE):
+                return {"status": "ok", "message": "Queue is paused — resume it to process."}
 
-        target_qualities = _parse_csv_list(settings.get("target_qualities"))
-        target_languages = _parse_csv_list(settings.get("target_languages"))
-        exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
-        dry_run = bool(settings.get("dry_run", True))
-        batch_size = int(settings.get("batch_size", 25) or 25)
-        max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
-        max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
-        breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
+            target_qualities = _parse_csv_list(settings.get("target_qualities"))
+            target_languages = _parse_csv_list(settings.get("target_languages"))
+            exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
+            dry_run = bool(settings.get("dry_run", True))
+            batch_size = int(settings.get("batch_size", 25) or 25)
+            max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
+            max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
+            breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
 
-        movie_ids = self.store.claim_batch(CONTENT_TYPE_MOVIE, batch_size)
-        if not movie_ids:
-            return {"status": "ok", "message": "Nothing queued. Run Scan Movies first."}
+            movie_ids = self.store.claim_batch(CONTENT_TYPE_MOVIE, batch_size)
+            if not movie_ids:
+                return {"status": "ok", "message": "Nothing queued. Run Scan Movies first."}
 
-        run_id = self.store.start_run(CONTENT_TYPE_MOVIE, dry_run)
-        limiter = _RateLimiter(max_per_second)
-        errors = 0
-        pruned_total = 0
-        processed = 0
-        breaker_tripped = False
+            run_id = self.store.start_run(CONTENT_TYPE_MOVIE, dry_run)
+            limiter = _RateLimiter(max_per_second)
+            errors = 0
+            pruned_total = 0
+            processed = 0
+            breaker_tripped = False
 
-        with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
-            futures = {
-                pool.submit(
-                    self._process_one_movie, mid, target_qualities, target_languages,
-                    exclude_unmatched_language, dry_run, limiter,
-                ): mid
-                for mid in movie_ids
-            }
-            for future in as_completed(futures):
-                movie_id = futures[future]
-                try:
-                    pruned = future.result()
-                    pruned_total += pruned
-                    self.store.mark_done(CONTENT_TYPE_MOVIE, movie_id)
-                except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
-                    errors += 1
-                    self.store.mark_error(CONTENT_TYPE_MOVIE, movie_id, exc)
-                processed += 1
+            with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+                futures = {
+                    pool.submit(
+                        self._process_one_movie, mid, target_qualities, target_languages,
+                        exclude_unmatched_language, dry_run, limiter,
+                    ): mid
+                    for mid in movie_ids
+                }
+                for future in as_completed(futures):
+                    movie_id = futures[future]
+                    try:
+                        pruned = future.result()
+                        pruned_total += pruned
+                        self.store.mark_done(CONTENT_TYPE_MOVIE, movie_id)
+                    except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
+                        errors += 1
+                        self.store.mark_error(CONTENT_TYPE_MOVIE, movie_id, exc)
+                    processed += 1
 
-                if processed >= 5 and not breaker_tripped:
-                    if errors / processed > breaker_ratio:
-                        self.store.set_paused(CONTENT_TYPE_MOVIE, True)
-                        breaker_tripped = True
+                    if processed >= 5 and not breaker_tripped:
+                        if errors / processed > breaker_ratio:
+                            self.store.set_paused(CONTENT_TYPE_MOVIE, True)
+                            breaker_tripped = True
 
-        note = "circuit breaker tripped" if breaker_tripped else ""
-        self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
+            note = "circuit breaker tripped" if breaker_tripped else ""
+            self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
 
-        msg = (
-            f"Processed {processed} ({errors} errors), "
-            f"{'would prune' if dry_run else 'pruned'} {pruned_total} relations."
-        )
-        if breaker_tripped:
-            msg += " Error rate too high — queue auto-paused."
-        return {"status": "ok", "message": msg}
+            msg = (
+                f"Processed {processed} ({errors} errors), "
+                f"{'would prune' if dry_run else 'pruned'} {pruned_total} relations."
+            )
+            if breaker_tripped:
+                msg += " Error rate too high — queue auto-paused."
+            return {"status": "ok", "message": msg}
+        finally:
+            self.store.release_lock("process_movie_batch")
 
     def _process_one_movie(
         self, movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
@@ -939,65 +965,71 @@ class Plugin:
     # --- series: process batch --------------------------------------------
 
     def _process_series_batch(self, settings):
-        if self.store.is_paused(CONTENT_TYPE_SERIES):
-            return {"status": "ok", "message": "Series queue is paused — resume it to process."}
+        acquired, held_since = self.store.try_acquire_lock("process_series_batch")
+        if not acquired:
+            return self._busy_lock_message("A series batch", held_since)
+        try:
+            if self.store.is_paused(CONTENT_TYPE_SERIES):
+                return {"status": "ok", "message": "Series queue is paused — resume it to process."}
 
-        target_qualities = _parse_csv_list(settings.get("target_qualities"))
-        target_languages = _parse_csv_list(settings.get("target_languages"))
-        exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
-        episode_sampling = settings.get("episode_sampling") or "first_only"
-        episode_sample_size = int(settings.get("episode_sample_size", 2) or 2)
-        dry_run = bool(settings.get("dry_run", True))
-        batch_size = int(settings.get("series_batch_size", 5) or 5)
-        max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
-        max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
-        breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
+            target_qualities = _parse_csv_list(settings.get("target_qualities"))
+            target_languages = _parse_csv_list(settings.get("target_languages"))
+            exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
+            episode_sampling = settings.get("episode_sampling") or "first_only"
+            episode_sample_size = int(settings.get("episode_sample_size", 2) or 2)
+            dry_run = bool(settings.get("dry_run", True))
+            batch_size = int(settings.get("series_batch_size", 5) or 5)
+            max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
+            max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
+            breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
 
-        series_ids = self.store.claim_batch(CONTENT_TYPE_SERIES, batch_size)
-        if not series_ids:
-            return {"status": "ok", "message": "Nothing queued. Run Scan Series first."}
+            series_ids = self.store.claim_batch(CONTENT_TYPE_SERIES, batch_size)
+            if not series_ids:
+                return {"status": "ok", "message": "Nothing queued. Run Scan Series first."}
 
-        run_id = self.store.start_run(CONTENT_TYPE_SERIES, dry_run)
-        limiter = _RateLimiter(max_per_second)
-        errors = 0
-        pruned_total = 0
-        processed = 0
-        breaker_tripped = False
+            run_id = self.store.start_run(CONTENT_TYPE_SERIES, dry_run)
+            limiter = _RateLimiter(max_per_second)
+            errors = 0
+            pruned_total = 0
+            processed = 0
+            breaker_tripped = False
 
-        with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
-            futures = {
-                pool.submit(
-                    self._process_one_series, sid, target_qualities, target_languages,
-                    exclude_unmatched_language, episode_sampling, episode_sample_size, dry_run, limiter,
-                ): sid
-                for sid in series_ids
-            }
-            for future in as_completed(futures):
-                series_id = futures[future]
-                try:
-                    pruned = future.result()
-                    pruned_total += pruned
-                    self.store.mark_done(CONTENT_TYPE_SERIES, series_id)
-                except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
-                    errors += 1
-                    self.store.mark_error(CONTENT_TYPE_SERIES, series_id, exc)
-                processed += 1
+            with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+                futures = {
+                    pool.submit(
+                        self._process_one_series, sid, target_qualities, target_languages,
+                        exclude_unmatched_language, episode_sampling, episode_sample_size, dry_run, limiter,
+                    ): sid
+                    for sid in series_ids
+                }
+                for future in as_completed(futures):
+                    series_id = futures[future]
+                    try:
+                        pruned = future.result()
+                        pruned_total += pruned
+                        self.store.mark_done(CONTENT_TYPE_SERIES, series_id)
+                    except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
+                        errors += 1
+                        self.store.mark_error(CONTENT_TYPE_SERIES, series_id, exc)
+                    processed += 1
 
-                if processed >= 5 and not breaker_tripped:
-                    if errors / processed > breaker_ratio:
-                        self.store.set_paused(CONTENT_TYPE_SERIES, True)
-                        breaker_tripped = True
+                    if processed >= 5 and not breaker_tripped:
+                        if errors / processed > breaker_ratio:
+                            self.store.set_paused(CONTENT_TYPE_SERIES, True)
+                            breaker_tripped = True
 
-        note = "circuit breaker tripped" if breaker_tripped else ""
-        self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
+            note = "circuit breaker tripped" if breaker_tripped else ""
+            self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
 
-        msg = (
-            f"Processed {processed} series ({errors} errors), "
-            f"{'would prune' if dry_run else 'pruned'} {pruned_total} episode relation(s)."
-        )
-        if breaker_tripped:
-            msg += " Error rate too high — queue auto-paused."
-        return {"status": "ok", "message": msg}
+            msg = (
+                f"Processed {processed} series ({errors} errors), "
+                f"{'would prune' if dry_run else 'pruned'} {pruned_total} episode relation(s)."
+            )
+            if breaker_tripped:
+                msg += " Error rate too high — queue auto-paused."
+            return {"status": "ok", "message": msg}
+        finally:
+            self.store.release_lock("process_series_batch")
 
     def _process_one_series(
         self, series_id, target_qualities, target_languages, exclude_unmatched_language,
@@ -1264,195 +1296,207 @@ class Plugin:
     # a Dispatcharr core limitation, not something fixable from here.
 
     def _generate_movie_strm(self, settings):
-        from apps.vod.models import M3UMovieRelation
-        from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+        acquired, held_since = self.store.try_acquire_lock("generate_movie_strm")
+        if not acquired:
+            return self._busy_lock_message("Movie .strm generation", held_since)
+        try:
+            from apps.vod.models import M3UMovieRelation
+            from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
-        base_url = (settings.get("strm_dispatcharr_url") or "").strip()
-        library_root = (settings.get("strm_library_path") or "").strip()
-        if not base_url or not library_root:
-            return {
-                "status": "error",
-                "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
-            }
-        queue = self.store.queue_counts(CONTENT_TYPE_MOVIE)
-        if queue["pending"] or queue["in_progress"]:
-            return {
-                "status": "error",
-                "message": (
-                    f"{queue['pending']} movie(s) pending, {queue['in_progress']} in progress — "
-                    "finish Process Batch first (Queue Status should read 0 pending and 0 in "
-                    "progress). Generating now would give still-unprobed titles a '- unprobed' "
-                    "filename and write a file for a relation that's about to be pruned, only for "
-                    "it to disappear on the next Generate run."
-                ),
-            }
-        subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
-        library_dir = os.path.join(library_root, subfolder)
-        include_id_tag = bool(settings.get("strm_include_id_tag"))
-        require_id = bool(settings.get("strm_require_id"))
+            base_url = (settings.get("strm_dispatcharr_url") or "").strip()
+            library_root = (settings.get("strm_library_path") or "").strip()
+            if not base_url or not library_root:
+                return {
+                    "status": "error",
+                    "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
+                }
+            queue = self.store.queue_counts(CONTENT_TYPE_MOVIE)
+            if queue["pending"] or queue["in_progress"]:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"{queue['pending']} movie(s) pending, {queue['in_progress']} in progress — "
+                        "finish Process Batch first (Queue Status should read 0 pending and 0 in "
+                        "progress). Generating now would give still-unprobed titles a '- unprobed' "
+                        "filename and write a file for a relation that's about to be pruned, only for "
+                        "it to disappear on the next Generate run."
+                    ),
+                }
+            subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
+            library_dir = os.path.join(library_root, subfolder)
+            include_id_tag = bool(settings.get("strm_include_id_tag"))
+            require_id = bool(settings.get("strm_require_id"))
 
-        relations = list(
-            M3UMovieRelation.objects.filter(m3u_account__is_active=True)
-            .select_related("movie")
-            .order_by("movie_id", "id")
-        )
-        quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_MOVIE, [r.id for r in relations])
+            relations = list(
+                M3UMovieRelation.objects.filter(m3u_account__is_active=True)
+                .select_related("movie")
+                .order_by("movie_id", "id")
+            )
+            quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_MOVIE, [r.id for r in relations])
 
-        by_movie = {}
-        for rel in relations:
-            by_movie.setdefault(rel.movie_id, []).append(rel)
+            by_movie = {}
+            for rel in relations:
+                by_movie.setdefault(rel.movie_id, []).append(rel)
 
-        created = updated = unchanged = errors = skipped_no_id = 0
-        current_paths = set()
-        for movie_relations in by_movie.values():
-            movie = movie_relations[0].movie
-            if require_id and not movie.tmdb_id and not movie.imdb_id:
-                # Not written this run, and therefore absent from
-                # current_paths below — an already-generated file for
-                # this movie gets cleaned up by the stale-file pass just
-                # like a pruned relation would be.
-                skipped_no_id += 1
-                continue
-            safe_name = sanitize_filename(movie.name)
-            tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
-            movie_dir = os.path.join(library_dir, sanitize_filename(movie.name + tag))
-            suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
-
-            for rel, suffix in zip(movie_relations, suffixes):
-                # The id tag lives on the folder only — every file inside
-                # it shares the same movie, so repeating the tag on each
-                # one would be pure redundancy.
-                path = os.path.join(movie_dir, f"{safe_name}{suffix}.strm")
-                url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
-                try:
-                    result = write_strm_if_changed(path, url)
-                except OSError:
-                    errors += 1
+            created = updated = unchanged = errors = skipped_no_id = 0
+            current_paths = set()
+            for movie_relations in by_movie.values():
+                movie = movie_relations[0].movie
+                if require_id and not movie.tmdb_id and not movie.imdb_id:
+                    # Not written this run, and therefore absent from
+                    # current_paths below — an already-generated file for
+                    # this movie gets cleaned up by the stale-file pass just
+                    # like a pruned relation would be.
+                    skipped_no_id += 1
                     continue
-                current_paths.add(path)
-                if result == "created":
-                    created += 1
-                elif result == "updated":
-                    updated += 1
-                else:
-                    unchanged += 1
+                safe_name = sanitize_filename(movie.name)
+                tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
+                movie_dir = os.path.join(library_dir, sanitize_filename(movie.name + tag))
+                suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
 
-        # Anything this plugin wrote last time but didn't write again just
-        # now belongs to a relation that's been pruned, a movie that's
-        # gone entirely, or a movie now skipped by "Skip titles with no
-        # id" — safe to remove precisely because we tracked writing it
-        # ourselves, unlike scanning the folder for "any .strm".
-        stale = self.store.get_strm_manifest(CONTENT_TYPE_MOVIE) - current_paths
-        removed = remove_stale_files(stale, stop_dir=library_dir)
-        self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
+                for rel, suffix in zip(movie_relations, suffixes):
+                    # The id tag lives on the folder only — every file inside
+                    # it shares the same movie, so repeating the tag on each
+                    # one would be pure redundancy.
+                    path = os.path.join(movie_dir, f"{safe_name}{suffix}.strm")
+                    url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
+                    try:
+                        result = write_strm_if_changed(path, url)
+                    except OSError:
+                        errors += 1
+                        continue
+                    current_paths.add(path)
+                    if result == "created":
+                        created += 1
+                    elif result == "updated":
+                        updated += 1
+                    else:
+                        unchanged += 1
 
-        msg = (
-            f"{created} created, {updated} updated, {unchanged} unchanged, "
-            f"{removed} removed across {len(by_movie)} movies."
-        )
-        if skipped_no_id:
-            msg += f" {skipped_no_id} movie(s) skipped (no TMDB/IMDB id)."
-        if errors:
-            msg += f" {errors} file write error(s) — check the path is writable."
-        return {"status": "ok", "message": msg}
+            # Anything this plugin wrote last time but didn't write again just
+            # now belongs to a relation that's been pruned, a movie that's
+            # gone entirely, or a movie now skipped by "Skip titles with no
+            # id" — safe to remove precisely because we tracked writing it
+            # ourselves, unlike scanning the folder for "any .strm".
+            stale = self.store.get_strm_manifest(CONTENT_TYPE_MOVIE) - current_paths
+            removed = remove_stale_files(stale, stop_dir=library_dir)
+            self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
+
+            msg = (
+                f"{created} created, {updated} updated, {unchanged} unchanged, "
+                f"{removed} removed across {len(by_movie)} movies."
+            )
+            if skipped_no_id:
+                msg += f" {skipped_no_id} movie(s) skipped (no TMDB/IMDB id)."
+            if errors:
+                msg += f" {errors} file write error(s) — check the path is writable."
+            return {"status": "ok", "message": msg}
+        finally:
+            self.store.release_lock("generate_movie_strm")
 
     def _generate_series_strm(self, settings):
-        from apps.vod.models import M3UEpisodeRelation
+        acquired, held_since = self.store.try_acquire_lock("generate_series_strm")
+        if not acquired:
+            return self._busy_lock_message("Series .strm generation", held_since)
+        try:
+            from apps.vod.models import M3UEpisodeRelation
 
-        from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
-        base_url = (settings.get("strm_dispatcharr_url") or "").strip()
-        library_root = (settings.get("strm_library_path") or "").strip()
-        if not base_url or not library_root:
-            return {
-                "status": "error",
-                "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
-            }
-        queue = self.store.queue_counts(CONTENT_TYPE_SERIES)
-        if queue["pending"] or queue["in_progress"]:
-            return {
-                "status": "error",
-                "message": (
-                    f"{queue['pending']} series pending, {queue['in_progress']} in progress — "
-                    "finish Process Series Batch first (Series Queue Status should read 0 pending "
-                    "and 0 in progress). Generating now would give still-unprobed titles a "
-                    "'- unprobed' filename and write a file for a relation that's about to be "
-                    "pruned, only for it to disappear on the next Generate run."
-                ),
-            }
-        subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
-        library_dir = os.path.join(library_root, subfolder)
-        include_id_tag = bool(settings.get("strm_include_id_tag"))
-        require_id = bool(settings.get("strm_require_id"))
+            base_url = (settings.get("strm_dispatcharr_url") or "").strip()
+            library_root = (settings.get("strm_library_path") or "").strip()
+            if not base_url or not library_root:
+                return {
+                    "status": "error",
+                    "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
+                }
+            queue = self.store.queue_counts(CONTENT_TYPE_SERIES)
+            if queue["pending"] or queue["in_progress"]:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"{queue['pending']} series pending, {queue['in_progress']} in progress — "
+                        "finish Process Series Batch first (Series Queue Status should read 0 pending "
+                        "and 0 in progress). Generating now would give still-unprobed titles a "
+                        "'- unprobed' filename and write a file for a relation that's about to be "
+                        "pruned, only for it to disappear on the next Generate run."
+                    ),
+                }
+            subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
+            library_dir = os.path.join(library_root, subfolder)
+            include_id_tag = bool(settings.get("strm_include_id_tag"))
+            require_id = bool(settings.get("strm_require_id"))
 
-        relations = list(
-            M3UEpisodeRelation.objects.filter(m3u_account__is_active=True)
-            .select_related("episode", "episode__series")
-            .order_by("episode_id", "id")
-        )
-        quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_EPISODE, [r.id for r in relations])
+            relations = list(
+                M3UEpisodeRelation.objects.filter(m3u_account__is_active=True)
+                .select_related("episode", "episode__series")
+                .order_by("episode_id", "id")
+            )
+            quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_EPISODE, [r.id for r in relations])
 
-        by_episode = {}
-        for rel in relations:
-            by_episode.setdefault(rel.episode_id, []).append(rel)
+            by_episode = {}
+            for rel in relations:
+                by_episode.setdefault(rel.episode_id, []).append(rel)
 
-        created = updated = unchanged = errors = 0
-        current_paths = set()
-        series_seen = set()
-        series_skipped_no_id = set()
-        for episode_relations in by_episode.values():
-            episode = episode_relations[0].episode
-            series = episode.series
-            if require_id and not series.tmdb_id and not series.imdb_id:
-                # Same reasoning as the movie side: not written this run,
-                # so an already-generated episode file for this series
-                # gets cleaned up by the stale-file pass below.
-                series_skipped_no_id.add(series.id)
-                continue
-            series_seen.add(series.id)
-
-            # The id tag lives on the series folder only — every episode
-            # under it shares the same series, so repeating the tag on
-            # each episode filename would be pure redundancy.
-            safe_series = sanitize_filename(series.name)
-            tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
-            series_dir = os.path.join(library_dir, sanitize_filename(series.name + tag))
-            season_num = episode.season_number or 1
-            episode_num = episode.episode_number or 0
-            base_filename = f"{safe_series} - S{season_num:02d}E{episode_num:02d}"
-            season_dir = os.path.join(series_dir, f"Season {season_num:02d}")
-
-            suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])
-
-            for rel, suffix in zip(episode_relations, suffixes):
-                path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
-                url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
-                try:
-                    result = write_strm_if_changed(path, url)
-                except OSError:
-                    errors += 1
+            created = updated = unchanged = errors = 0
+            current_paths = set()
+            series_seen = set()
+            series_skipped_no_id = set()
+            for episode_relations in by_episode.values():
+                episode = episode_relations[0].episode
+                series = episode.series
+                if require_id and not series.tmdb_id and not series.imdb_id:
+                    # Same reasoning as the movie side: not written this run,
+                    # so an already-generated episode file for this series
+                    # gets cleaned up by the stale-file pass below.
+                    series_skipped_no_id.add(series.id)
                     continue
-                current_paths.add(path)
-                if result == "created":
-                    created += 1
-                elif result == "updated":
-                    updated += 1
-                else:
-                    unchanged += 1
+                series_seen.add(series.id)
 
-        stale = self.store.get_strm_manifest(CONTENT_TYPE_EPISODE) - current_paths
-        removed = remove_stale_files(stale, stop_dir=library_dir)
-        self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
+                # The id tag lives on the series folder only — every episode
+                # under it shares the same series, so repeating the tag on
+                # each episode filename would be pure redundancy.
+                safe_series = sanitize_filename(series.name)
+                tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
+                series_dir = os.path.join(library_dir, sanitize_filename(series.name + tag))
+                season_num = episode.season_number or 1
+                episode_num = episode.episode_number or 0
+                base_filename = f"{safe_series} - S{season_num:02d}E{episode_num:02d}"
+                season_dir = os.path.join(series_dir, f"Season {season_num:02d}")
 
-        msg = (
-            f"{created} created, {updated} updated, {unchanged} unchanged, "
-            f"{removed} removed across {len(series_seen)} series."
-        )
-        if series_skipped_no_id:
-            msg += f" {len(series_skipped_no_id)} series skipped (no TMDB/IMDB id)."
-        if errors:
-            msg += f" {errors} file write error(s) — check the path is writable."
-        return {"status": "ok", "message": msg}
+                suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])
+
+                for rel, suffix in zip(episode_relations, suffixes):
+                    path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
+                    url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
+                    try:
+                        result = write_strm_if_changed(path, url)
+                    except OSError:
+                        errors += 1
+                        continue
+                    current_paths.add(path)
+                    if result == "created":
+                        created += 1
+                    elif result == "updated":
+                        updated += 1
+                    else:
+                        unchanged += 1
+
+            stale = self.store.get_strm_manifest(CONTENT_TYPE_EPISODE) - current_paths
+            removed = remove_stale_files(stale, stop_dir=library_dir)
+            self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
+
+            msg = (
+                f"{created} created, {updated} updated, {unchanged} unchanged, "
+                f"{removed} removed across {len(series_seen)} series."
+            )
+            if series_skipped_no_id:
+                msg += f" {len(series_skipped_no_id)} series skipped (no TMDB/IMDB id)."
+            if errors:
+                msg += f" {errors} file write error(s) — check the path is writable."
+            return {"status": "ok", "message": msg}
+        finally:
+            self.store.release_lock("generate_series_strm")
 
     def _delete_strm_files(self, settings):
         """Deletes every file and folder inside the configured Movies/Series

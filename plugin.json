@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest \u2014 with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -272,7 +272,7 @@
     {
       "id": "scan_and_process",
       "label": "[MOVIES] Scan + Process",
-      "description": "One click: scan for changed movies, then probe/select/prune the batch.",
+      "description": "One click: scan for changed movies, then probe/select/prune the batch. Refuses to start a second one while an earlier click is still processing.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -288,7 +288,7 @@
     {
       "id": "process_batch",
       "label": "[MOVIES] Process Batch",
-      "description": "Probe + select + (unless Dry Run) prune the next queued batch.",
+      "description": "Probe + select + (unless Dry Run) prune the next queued batch. Refuses to start a second one while an earlier click is still processing.",
       "button_label": "Process",
       "button_variant": "outline",
       "button_color": "blue"
@@ -328,7 +328,7 @@
     {
       "id": "generate_movie_strm",
       "label": "[MOVIES] Generate .strm Files",
-      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items — finish Process Batch first.",
+      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Batch first.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -336,7 +336,7 @@
     {
       "id": "scan_and_process_series",
       "label": "[SERIES] Scan + Process",
-      "description": "One click: scan for changed series, then probe/select/prune per episode.",
+      "description": "One click: scan for changed series, then probe/select/prune per episode. Refuses to start a second one while an earlier click is still processing.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -352,7 +352,7 @@
     {
       "id": "process_series",
       "label": "[SERIES] Process Batch",
-      "description": "Fetch each queued series' episodes if needed, then probe/select/prune.",
+      "description": "Fetch each queued series' episodes if needed, then probe/select/prune. Refuses to start a second one while an earlier click is still processing.",
       "button_label": "Process",
       "button_variant": "outline",
       "button_color": "blue"
@@ -392,7 +392,7 @@
     {
       "id": "generate_series_strm",
       "label": "[SERIES] Generate .strm Files",
-      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items — finish Process Series Batch first.",
+      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Series Batch first.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"

@@ -283,6 +283,68 @@ def test_reset_all_clears_every_table():
     with_store(run)
 
 
+def test_try_acquire_lock_blocks_a_second_holder():
+    # This is the guard added after a real production incident: a re-clicked
+    # or retried action landing on a second uwsgi worker while the first was
+    # still running must not start a duplicate one on top of it.
+    def run(s):
+        acquired, held_since = s.try_acquire_lock("process_movie_batch")
+        assert acquired is True
+        assert held_since is None
+
+        acquired2, held_since2 = s.try_acquire_lock("process_movie_batch")
+        assert acquired2 is False
+        assert held_since2 is not None
+
+    with_store(run)
+
+
+def test_release_lock_allows_reacquiring():
+    def run(s):
+        s.try_acquire_lock("process_movie_batch")
+        s.release_lock("process_movie_batch")
+
+        acquired, _ = s.try_acquire_lock("process_movie_batch")
+        assert acquired is True
+
+    with_store(run)
+
+
+def test_locks_are_independent_per_name():
+    def run(s):
+        assert s.try_acquire_lock("process_movie_batch")[0] is True
+        assert s.try_acquire_lock("process_series_batch")[0] is True
+
+    with_store(run)
+
+
+def test_stale_lock_can_be_reacquired_without_manual_release():
+    # A container restarted mid-batch (exactly what happened in production)
+    # leaves this row behind forever unless a stale lock can be reclaimed —
+    # stale_after=0 treats any already-held lock as abandoned immediately,
+    # standing in for "a very old lock" without sleeping in the test.
+    import time as _time
+
+    def run(s):
+        assert s.try_acquire_lock("process_movie_batch")[0] is True
+        _time.sleep(0.01)  # guarantee a later, distinct timestamp
+        acquired, _ = s.try_acquire_lock("process_movie_batch", stale_after=0)
+        assert acquired is True
+
+    with_store(run)
+
+
+def test_reset_all_also_clears_locks():
+    def run(s):
+        s.try_acquire_lock("process_movie_batch")
+        s.reset_all()
+        acquired, held_since = s.try_acquire_lock("process_movie_batch")
+        assert acquired is True
+        assert held_since is None
+
+    with_store(run)
+
+
 if __name__ == "__main__":
     tests = [obj for name, obj in list(globals().items()) if name.startswith("test_")]
     failures = 0
