@@ -28,6 +28,12 @@ Validated end to end against a real Dispatcharr instance, dry-run and live: prob
 
 Same sequence for series, with the `[SERIES]` actions and **Series Queue Status**.
 
+## Retrying series Dispatcharr silently gave up on
+
+Dispatcharr fetches a series' episode list lazily, on demand, and marks that relation `episodes_fetched` the moment the provider responds without an error — even if the response was empty. Nothing in Dispatcharr ever re-checks or clears that flag afterward, so a relation that hit an empty response on its one and only attempt (a transient provider glitch, rate limit, etc.) stays stuck at zero episodes forever, even once the provider's real data is complete. This is a genuine Dispatcharr limitation, not something this plugin causes — reported upstream as a distinct case from [Dispatcharr/Dispatcharr#556](https://github.com/Dispatcharr/Dispatcharr/issues/556) (that one's triggered by a crash during sync; this one is silent and error-free).
+
+**[SERIES] Retry Empty Episode Fetches** finds relations stuck exactly that way (`episodes_fetched=true`, zero episodes, source still active) and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per relation so a title that's genuinely empty on the provider's side doesn't get retried forever. It's a manual action (or pick it as a dedicated scheduled action) — it doesn't run automatically as part of Scan + Process, since it's meant as an occasional sweep rather than something to check on every pass.
+
 ## .strm generation (Emby/Jellyfin, real multi-version playback)
 
 Dispatcharr's native Xtream API always collapses a title's kept relations down to whichever M3U account has the highest priority, regardless of category — a pure Xtream client (TiviMate, etc.) can never select a specific quality tier this way (verified with real ffprobe testing against the raw provider stream). **Generate Movie/Series .strm Files** sidesteps this: each `.strm` is pinned to one exact relation via Dispatcharr's generic `/proxy/vod/<type>/<uuid>?stream_id=` endpoint (the same mechanism the `vod2mlib`/`emby-xtream` plugins use for movies), so every kept quality tier becomes a genuinely distinct, correctly-labelled (`Title - 01 - 2160p.strm`, `Title - 02 - 1080p.strm` — the rank prefix keeps Emby/Jellyfin's alphabetical sort in quality order, since plain text sorts "1080p" before "2160p"), and independently playable file. This does **not** help pure Xtream/IPTV clients — only media servers that read `.strm` files from disk.

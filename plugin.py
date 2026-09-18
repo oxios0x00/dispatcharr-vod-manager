@@ -57,7 +57,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.2"
+    version = "1.0.3"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -333,6 +333,7 @@ class Plugin:
                 {"value": "scan_and_process_series", "label": "Scan + Process Series (recommended)"},
                 {"value": "scan_series", "label": "Scan Series only"},
                 {"value": "process_series", "label": "Process Series Batch only"},
+                {"value": "retry_empty_series_fetches", "label": "Retry Empty Series Episode Fetches only"},
                 {"value": "generate_movie_strm", "label": "Generate Movie .strm Files only"},
                 {"value": "generate_series_strm", "label": "Generate Series .strm Files only"},
             ],
@@ -452,6 +453,14 @@ class Plugin:
             "button_label": "Resume",
             "button_variant": "outline",
             "button_color": "teal",
+        },
+        {
+            "id": "retry_empty_series_fetches",
+            "label": "[SERIES] Retry Empty Episode Fetches",
+            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way (fetched=true, zero episodes) and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per series so a title that's genuinely empty on the provider's side doesn't get retried forever.",
+            "button_label": "Retry Empty Fetches",
+            "button_variant": "outline",
+            "button_color": "orange",
         },
         {
             "id": "clean_series_titles",
@@ -608,6 +617,8 @@ class Plugin:
         if action_id == "resume_series_queue":
             self.store.set_paused(CONTENT_TYPE_SERIES, False)
             return {"status": "ok", "message": "Series queue resumed."}
+        if action_id == "retry_empty_series_fetches":
+            return self._retry_empty_series_fetches(settings)
         if action_id == "apply_schedule":
             return self._apply_schedule(settings)
         if action_id == "remove_schedule":
@@ -946,6 +957,68 @@ class Plugin:
             "status": "ok",
             "message": f"Scanned {scanned} series, enqueued {enqueued} new/changed.",
         }
+
+    # --- series: retry a fetch Dispatcharr wrongly considers "done" --------
+    #
+    # apps/vod/tasks.py's refresh_series_episodes() sets
+    # custom_properties['episodes_fetched'] = True after ANY provider
+    # response that doesn't raise — including one with an empty episode
+    # list, e.g. from a transient provider glitch. Nothing in Dispatcharr
+    # ever re-checks or clears that flag, so a relation unlucky enough to
+    # hit an empty response on its one attempt stays stuck at zero
+    # episodes forever, even once the provider's real data is fine.
+    # _process_one_series_once (above) only calls refresh_series_episodes
+    # when this flag is falsy, so flipping it back and re-queuing the
+    # series is enough to force a genuine retry through the normal
+    # pipeline — no separate retry codepath needed. Reported upstream
+    # as a distinct case from Dispatcharr/Dispatcharr#556 (that one's
+    # triggered by a crash during the sync, logged as an ERROR; this one
+    # is a silent, error-free empty response).
+    _MAX_EMPTY_FETCH_RETRIES = 3
+
+    def _retry_empty_series_fetches(self, settings):
+        from django.db.models import Count
+        from apps.vod.models import M3USeriesRelation
+
+        candidates = (
+            M3USeriesRelation.objects.filter(m3u_account__is_active=True)
+            .annotate(n_episodes=Count("episode_relations"))
+            .filter(n_episodes=0)
+        )
+
+        reset_relations = 0
+        capped = 0
+        series_to_requeue = set()
+        for relation in candidates:
+            props = relation.custom_properties or {}
+            if not props.get("episodes_fetched"):
+                # Never fetched at all yet — not "stuck", just not reached
+                # by the normal pipeline yet. Leave it alone.
+                continue
+
+            key = f"empty_series_retry_count:{relation.id}"
+            attempts = self.store.get_state(key, 0)
+            if attempts >= self._MAX_EMPTY_FETCH_RETRIES:
+                capped += 1
+                continue
+
+            props["episodes_fetched"] = False
+            relation.custom_properties = props
+            relation.save(update_fields=["custom_properties"])
+            self.store.set_state(key, attempts + 1)
+            reset_relations += 1
+            series_to_requeue.add(relation.series_id)
+
+        for series_id in series_to_requeue:
+            self.store.requeue(CONTENT_TYPE_SERIES, series_id)
+
+        msg = (
+            f"Reset {reset_relations} relation(s) across {len(series_to_requeue)} series — "
+            "re-queued for a fresh fetch on the next Process Series Batch."
+        )
+        if capped:
+            msg += f" {capped} relation(s) skipped (already retried {self._MAX_EMPTY_FETCH_RETRIES}x, likely genuinely empty)."
+        return {"status": "ok", "message": msg}
 
     def _scan_and_process_series(self, settings, scheduled=False):
         parts = []
@@ -1621,6 +1694,7 @@ class Plugin:
         "process_series",
         "generate_movie_strm",
         "generate_series_strm",
+        "retry_empty_series_fetches",
     )
 
     def _parse_cron(self, cron_expr):

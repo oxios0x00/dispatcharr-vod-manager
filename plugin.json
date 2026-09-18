@@ -1,7 +1,7 @@
 {
   "name": "VOD Manager",
-  "version": "1.0.2",
-  "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest \u2014 with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
+  "version": "1.0.3",
+  "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
   "fields": [
@@ -10,7 +10,7 @@
       "label": "Dry run (log decisions, don't delete anything)",
       "type": "boolean",
       "default": true,
-      "help_text": "ON: probes and decides winners but never deletes anything. Turn OFF once a test batch looks right \u2014 pruning is a real delete, only recoverable via Dispatcharr's own next refresh."
+      "help_text": "ON: probes and decides winners but never deletes anything. Turn OFF once a test batch looks right — pruning is a real delete, only recoverable via Dispatcharr's own next refresh."
     },
     {
       "id": "target_qualities",
@@ -31,7 +31,7 @@
       "label": "Exclude relations matching none of the target languages",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely \u2014 can leave a title with nothing kept if no tier matches."
+      "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
     },
     {
       "id": "batch_size",
@@ -47,7 +47,7 @@
       "type": "number",
       "default": 2,
       "min": 1,
-      "help_text": "Stay below your provider's connection limit \u2014 probing uses a real stream connection."
+      "help_text": "Stay below your provider's connection limit — probing uses a real stream connection."
     },
     {
       "id": "max_probes_per_second",
@@ -79,7 +79,7 @@
       "type": "number",
       "default": 5,
       "min": 1,
-      "help_text": "Smaller than the Films batch size \u2014 one series can fan out into dozens of episodes."
+      "help_text": "Smaller than the Films batch size — one series can fan out into dozens of episodes."
     },
     {
       "id": "episode_sampling",
@@ -114,7 +114,7 @@
       "id": "_section_title_cleanup",
       "label": "[TITLE CLEANUP]",
       "type": "info",
-      "description": "Cosmetic only \u2014 strips junk prefixes from titles (e.g. 'NF - The Matrix' \u2192 'The Matrix'). Never affects quality/language selection."
+      "description": "Cosmetic only — strips junk prefixes from titles (e.g. 'NF - The Matrix' → 'The Matrix'). Never affects quality/language selection."
     },
     {
       "id": "title_cleanup_tags",
@@ -134,7 +134,7 @@
       "id": "_section_strm",
       "label": "[.STRM OUTPUT]",
       "type": "info",
-      "description": "Dispatcharr's Xtream API always serves whichever relation's M3U account has the highest priority, regardless of category \u2014 a plain IPTV client can't select a specific quality tier. Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a pruned/removed relation's file is deleted automatically (only files this plugin tracks \u2014 nothing added by hand is touched). Recommended order: Scan, then Process Batch repeatedly until Queue Status reads 0 pending and 0 in progress, then Clean Titles, then Generate. Both Generate actions refuse to run at all while their queue still has pending or in-progress items, precisely to prevent that ordering mistake \u2014 generating too early would give unprobed titles a '- unprobed' filename and write files for relations about to be pruned, both of which get silently cleaned up (renamed/deleted) on the next Generate anyway, so nothing is gained by rushing it."
+      "description": "Dispatcharr's Xtream API always serves whichever relation's M3U account has the highest priority, regardless of category — a plain IPTV client can't select a specific quality tier. Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a pruned/removed relation's file is deleted automatically (only files this plugin tracks — nothing added by hand is touched). Recommended order: Scan, then Process Batch repeatedly until Queue Status reads 0 pending and 0 in progress, then Clean Titles, then Generate. Both Generate actions refuse to run at all while their queue still has pending or in-progress items, precisely to prevent that ordering mistake — generating too early would give unprobed titles a '- unprobed' filename and write files for relations about to be pruned, both of which get silently cleaned up (renamed/deleted) on the next Generate anyway, so nothing is gained by rushing it."
     },
     {
       "id": "strm_dispatcharr_url",
@@ -142,7 +142,7 @@
       "type": "string",
       "default": "",
       "placeholder": "http://192.168.1.94:9292",
-      "help_text": "Must be reachable from your media server, not just from Dispatcharr \u2014 a LAN IP/hostname, not 'localhost'."
+      "help_text": "Must be reachable from your media server, not just from Dispatcharr — a LAN IP/hostname, not 'localhost'."
     },
     {
       "id": "strm_library_path",
@@ -188,7 +188,7 @@
       "id": "_section_reprobe",
       "label": "[TARGETED RE-PROBE]",
       "type": "info",
-      "description": "A relation is only ever probed once and trusted forever \u2014 if a provider swaps the file behind a stream_id without changing it (confirmed happening for real), the cached quality can go stale silently. Fixes just the one relation you point at, not the whole catalogue."
+      "description": "A relation is only ever probed once and trusted forever — if a provider swaps the file behind a stream_id without changing it (confirmed happening for real), the cached quality can go stale silently. Fixes just the one relation you point at, not the whole catalogue."
     },
     {
       "id": "reprobe_stream_id",
@@ -255,6 +255,10 @@
         {
           "value": "process_series",
           "label": "Process Series Batch only"
+        },
+        {
+          "value": "retry_empty_series_fetches",
+          "label": "Retry Empty Series Episode Fetches only"
         },
         {
           "value": "generate_movie_strm",
@@ -382,6 +386,14 @@
       "button_color": "teal"
     },
     {
+      "id": "retry_empty_series_fetches",
+      "label": "[SERIES] Retry Empty Episode Fetches",
+      "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way (fetched=true, zero episodes) and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per series so a title that's genuinely empty on the provider's side doesn't get retried forever.",
+      "button_label": "Retry Empty Fetches",
+      "button_variant": "outline",
+      "button_color": "orange"
+    },
+    {
       "id": "clean_series_titles",
       "label": "[SERIES] Clean Titles",
       "description": "Strip configured junk prefixes from series titles (uses Dry Run).",
@@ -429,14 +441,14 @@
     {
       "id": "reset_plugin_state",
       "label": "[MAINTENANCE] Reset Plugin State",
-      "description": "Wipes the probe cache, queues, known relations, run history and catalog stats \u2014 starts fresh on the next Scan/Process.",
+      "description": "Wipes the probe cache, queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
       "button_label": "Reset",
       "button_variant": "outline",
       "button_color": "red",
       "confirm": {
         "required": true,
         "title": "Reset all plugin state?",
-        "message": "Clears every probe result and queue this plugin has recorded \u2014 the next Process Batch/Series will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched."
+        "message": "Clears every probe result and queue this plugin has recorded — the next Process Batch/Series will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched."
       }
     },
     {
