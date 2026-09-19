@@ -57,7 +57,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.3"
+    version = "1.0.4"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -457,7 +457,7 @@ class Plugin:
         {
             "id": "retry_empty_series_fetches",
             "label": "[SERIES] Retry Empty Episode Fetches",
-            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way (fetched=true, zero episodes) and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per series so a title that's genuinely empty on the provider's side doesn't get retried forever.",
+            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty or incomplete one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way — zero episodes, or fewer than the provider actually lists (checked with one provider call per suspicious relation, at most 60 per click, click again for the rest) — and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per relation so a title that's genuinely short on the provider's side doesn't get retried forever.",
             "button_label": "Retry Empty Fetches",
             "button_variant": "outline",
             "button_color": "orange",
@@ -975,26 +975,67 @@ class Plugin:
     # triggered by a crash during the sync, logged as an ERROR; this one
     # is a silent, error-free empty response).
     _MAX_EMPTY_FETCH_RETRIES = 3
+    # Provider calls per click, so a big catalogue can't turn one click into
+    # hundreds of requests at once — just click again for the rest.
+    _MAX_PROVIDER_CHECKS = 60
+
+    def _provider_episode_count(self, relation):
+        from core.xtream_codes import Client
+        from .episodes import count_provider_episodes
+
+        account = relation.m3u_account
+        with Client(
+            account.server_url, account.username, account.password, account.get_user_agent_string()
+        ) as client:
+            return count_provider_episodes(client.get_series_info(relation.external_series_id))
 
     def _retry_empty_series_fetches(self, settings):
+        from collections import defaultdict
+
         from django.db.models import Count
         from apps.vod.models import M3USeriesRelation
+        from .episodes import is_incomplete, needs_provider_check
 
-        candidates = (
+        relations = list(
             M3USeriesRelation.objects.filter(m3u_account__is_active=True)
             .annotate(n_episodes=Count("episode_relations"))
-            .filter(n_episodes=0)
+            .select_related("m3u_account")
         )
+        by_series = defaultdict(list)
+        for relation in relations:
+            by_series[relation.series_id].append(relation)
 
-        reset_relations = 0
-        capped = 0
+        reset_empty = reset_partial = capped = unchecked = check_errors = 0
+        checks = 0
         series_to_requeue = set()
-        for relation in candidates:
+        for relation in relations:
             props = relation.custom_properties or {}
             if not props.get("episodes_fetched"):
                 # Never fetched at all yet — not "stuck", just not reached
                 # by the normal pipeline yet. Leave it alone.
                 continue
+
+            partial = False
+            if relation.n_episodes > 0:
+                sibling_max = max(
+                    (r.n_episodes for r in by_series[relation.series_id] if r.id != relation.id),
+                    default=0,
+                )
+                if not needs_provider_check(relation.n_episodes, sibling_max):
+                    continue
+                if checks >= self._MAX_PROVIDER_CHECKS:
+                    unchecked += 1
+                    continue
+                checks += 1
+                try:
+                    provider_count = self._provider_episode_count(relation)
+                except Exception:  # noqa: BLE001 - one unreachable series must not abort the sweep
+                    check_errors += 1
+                    continue
+                time.sleep(0.5)
+                if not is_incomplete(relation.n_episodes, provider_count):
+                    continue
+                partial = True
 
             key = f"empty_series_retry_count:{relation.id}"
             attempts = self.store.get_state(key, 0)
@@ -1006,18 +1047,26 @@ class Plugin:
             relation.custom_properties = props
             relation.save(update_fields=["custom_properties"])
             self.store.set_state(key, attempts + 1)
-            reset_relations += 1
             series_to_requeue.add(relation.series_id)
+            if partial:
+                reset_partial += 1
+            else:
+                reset_empty += 1
 
         for series_id in series_to_requeue:
             self.store.requeue(CONTENT_TYPE_SERIES, series_id)
 
         msg = (
-            f"Reset {reset_relations} relation(s) across {len(series_to_requeue)} series — "
-            "re-queued for a fresh fetch on the next Process Series Batch."
+            f"Reset {reset_empty + reset_partial} relation(s) across {len(series_to_requeue)} series "
+            f"({reset_empty} empty, {reset_partial} partial) — re-queued for a fresh fetch on the "
+            "next Process Series Batch."
         )
+        if unchecked:
+            msg += f" {unchecked} more suspicious relation(s) not checked yet (limit {self._MAX_PROVIDER_CHECKS} provider calls per click) — click again."
+        if check_errors:
+            msg += f" {check_errors} could not be checked (provider unreachable)."
         if capped:
-            msg += f" {capped} relation(s) skipped (already retried {self._MAX_EMPTY_FETCH_RETRIES}x, likely genuinely empty)."
+            msg += f" {capped} relation(s) skipped (already retried {self._MAX_EMPTY_FETCH_RETRIES}x)."
         return {"status": "ok", "message": msg}
 
     def _scan_and_process_series(self, settings, scheduled=False):

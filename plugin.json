@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -388,7 +388,7 @@
     {
       "id": "retry_empty_series_fetches",
       "label": "[SERIES] Retry Empty Episode Fetches",
-      "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way (fetched=true, zero episodes) and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per series so a title that's genuinely empty on the provider's side doesn't get retried forever.",
+      "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty or incomplete one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way — zero episodes, or fewer than the provider actually lists (checked with one provider call per suspicious relation, at most 60 per click, click again for the rest) — and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per relation so a title that's genuinely short on the provider's side doesn't get retried forever.",
       "button_label": "Retry Empty Fetches",
       "button_variant": "outline",
       "button_color": "orange"
