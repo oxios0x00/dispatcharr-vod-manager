@@ -184,3 +184,21 @@ def test_remove_stale_files_never_touches_a_similarly_prefixed_sibling(tmp_path)
     remove_stale_files([stale_path], stop_dir=stop_dir)
 
     assert os.path.exists(sibling_dir)  # untouched
+
+
+def test_best_quality_first_orders_by_rank_not_by_input_order():
+    from strm import best_quality_first, plan_suffixes
+
+    # Input order is relation-id order: the older 1080p comes before the 2160p.
+    relations = ["old-1080p", "new-2160p"]
+    suffixes = plan_suffixes(["1080p", "2160p"])
+    assert best_quality_first(relations, suffixes) == [
+        ("new-2160p", " - 01 - 2160p"),
+        ("old-1080p", " - 02 - 1080p"),
+    ]
+
+
+def test_best_quality_first_keeps_a_single_relation():
+    from strm import best_quality_first
+
+    assert best_quality_first(["only"], [" - 1080p"]) == [("only", " - 1080p")]

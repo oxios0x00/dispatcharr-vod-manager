@@ -57,7 +57,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.4"
+    version = "1.0.5"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -1423,7 +1423,7 @@ class Plugin:
             return self._busy_lock_message("Movie .strm generation", held_since)
         try:
             from apps.vod.models import M3UMovieRelation
-            from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
@@ -1476,7 +1476,7 @@ class Plugin:
                 movie_dir = os.path.join(library_dir, sanitize_filename(movie.name + tag))
                 suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
 
-                for rel, suffix in zip(movie_relations, suffixes):
+                for rel, suffix in best_quality_first(movie_relations, suffixes):
                     # The id tag lives on the folder only — every file inside
                     # it shares the same movie, so repeating the tag on each
                     # one would be pure redundancy.
@@ -1523,7 +1523,7 @@ class Plugin:
         try:
             from apps.vod.models import M3UEpisodeRelation
 
-            from .strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
@@ -1588,7 +1588,7 @@ class Plugin:
 
                 suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])
 
-                for rel, suffix in zip(episode_relations, suffixes):
+                for rel, suffix in best_quality_first(episode_relations, suffixes):
                     path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
                     url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
                     try:

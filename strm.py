@@ -77,9 +77,10 @@ def plan_suffixes(quality_labels):
     relation was never successfully probed), always shown — even for a
     lone relation, so the quality is visible at a glance without having
     to open the file. With two or more relations, the label is also
-    prefixed with a rank number so alphabetical sort (what Emby/Jellyfin
-    actually use to order versions) matches quality order instead of
-    string order — '1080p' sorts before '2160p' as plain text, which is
+    prefixed with a rank number so alphabetical sort matches quality
+    order instead of string order — helpful in any file listing, though
+    Emby does not necessarily use it to pick its default version (see
+    best_quality_first) — '1080p' sorts before '2160p' as plain text, which is
     backwards. The fallback for an unprobed relation among several
     becomes positional ('v2', 'v3', ...) instead of the ambiguous
     'unprobed' repeated on more than one file, and never collides with a
@@ -113,6 +114,15 @@ def plan_suffixes(quality_labels):
     position = {original_i: rank_n for rank_n, original_i in enumerate(order, start=1)}
 
     return [f" - {position[i]:02d} - {names[i]}" for i in range(len(names))]
+
+
+def best_quality_first(relations, suffixes):
+    """Pairs each relation with its filename suffix, ordered so the best
+    quality is written first (rank 01 before 02, ...). Emby appears to keep
+    whichever version of a title it meets first as the primary one, so the
+    file creation order matters: writing in relation-id order made the
+    older — usually lower-quality — relation the first file on disk."""
+    return sorted(zip(relations, suffixes), key=lambda pair: pair[1])
 
 
 def remove_stale_files(paths, stop_dir):
