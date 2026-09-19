@@ -28,6 +28,22 @@ CONTENT_TYPE_EPISODE = "episode"
 # reload cycle.
 
 
+def _release_db_connections():
+    """Hands this thread's database connection back to Dispatcharr's pool.
+
+    Each Process Batch runs its per-title work in a ThreadPoolExecutor. Under
+    Dispatcharr's gevent pool (MAX_CONNS = 8 per web worker) every such
+    thread checks a connection out on its first query and, unlike the request
+    greenlet, nobody returns it: Dispatcharr only calls close_old_connections()
+    for the greenlet that ran the action. Batch after batch, the leaked
+    checkouts filled a worker's pool, after which anything needing the
+    database in that worker (login, saving settings, the next batch's own
+    threads) waited forever — the 504s and the frozen batches of 2026-09-19."""
+    from django.db import connections
+
+    connections.close_all()
+
+
 def _parse_csv_list(value):
     if not value:
         return []
@@ -57,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.5"
+    version = "1.0.6"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -846,6 +862,8 @@ class Plugin:
             return self._process_one_movie_once(
                 movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
             )
+        finally:
+            _release_db_connections()
 
     def _process_one_movie_once(
         self, movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
@@ -1172,6 +1190,8 @@ class Plugin:
                 series_id, target_qualities, target_languages, exclude_unmatched_language,
                 episode_sampling, episode_sample_size, dry_run, limiter,
             )
+        finally:
+            _release_db_connections()
 
     def _process_one_series_once(
         self, series_id, target_qualities, target_languages, exclude_unmatched_language,
