@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.8"
+    version = "1.0.9"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -750,35 +750,29 @@ class Plugin:
 
     # --- scan / enqueue -----------------------------------------------------
 
+    def _enqueue_changed(self, content_type, relation_model, id_field):
+        """Requeue every title that is new or whose relation ids differ from
+        the last pass. The relations are read in one query and compared in
+        memory: a query per title made the scan outlast the browser timeout.
+        requeue(), not enqueue(): enqueue() is a silent no-op for a title
+        already processed, which is exactly the case a changed relation set
+        must reset."""
+        current = {}
+        for content_id, relation_id in relation_model.objects.filter(
+            m3u_account__is_active=True
+        ).values_list(id_field, "id"):
+            current.setdefault(content_id, set()).add(relation_id)
+        changed = self.store.changed_content_ids(content_type, current)
+        for content_id in changed:
+            self.store.requeue(content_type, content_id)
+        return len(current), len(changed)
+
     def _scan_movies(self, settings):
         from apps.vod.models import Movie, M3UMovieRelation
 
-        enqueued = 0
-        scanned = 0
-        # Kept simple: iterate every movie with at least one active
-        # relation. On a very large catalogue this single synchronous
-        # action call can be slow — a Celery-backed background scan would
-        # be the natural next step if that becomes a real bottleneck.
-        movie_ids = (
-            M3UMovieRelation.objects.filter(m3u_account__is_active=True)
-            .values_list("movie_id", flat=True)
-            .distinct()
+        scanned, enqueued = self._enqueue_changed(
+            CONTENT_TYPE_MOVIE, M3UMovieRelation, "movie_id"
         )
-        for movie_id in movie_ids:
-            scanned += 1
-            current_ids = set(
-                M3UMovieRelation.objects.filter(
-                    movie_id=movie_id, m3u_account__is_active=True
-                ).values_list("id", flat=True)
-            )
-            known_ids = self.store.get_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id)
-            if known_ids is None or current_ids != known_ids:
-                # requeue(), not enqueue(): enqueue() is INSERT ... ON
-                # CONFLICT DO NOTHING, a silent no-op for a title that was
-                # already processed (status done/error from a prior run) —
-                # exactly the case a changed relation set needs to reset.
-                self.store.requeue(CONTENT_TYPE_MOVIE, movie_id)
-                enqueued += 1
 
         return {
             "status": "ok",
@@ -962,24 +956,9 @@ class Plugin:
     def _scan_series(self, settings):
         from apps.vod.models import Series, M3USeriesRelation
 
-        enqueued = 0
-        scanned = 0
-        series_ids = (
-            M3USeriesRelation.objects.filter(m3u_account__is_active=True)
-            .values_list("series_id", flat=True)
-            .distinct()
+        scanned, enqueued = self._enqueue_changed(
+            CONTENT_TYPE_SERIES, M3USeriesRelation, "series_id"
         )
-        for series_id in series_ids:
-            scanned += 1
-            current_ids = set(
-                M3USeriesRelation.objects.filter(
-                    series_id=series_id, m3u_account__is_active=True
-                ).values_list("id", flat=True)
-            )
-            known_ids = self.store.get_known_relation_ids(CONTENT_TYPE_SERIES, series_id)
-            if known_ids is None or current_ids != known_ids:
-                self.store.requeue(CONTENT_TYPE_SERIES, series_id)
-                enqueued += 1
 
         return {
             "status": "ok",

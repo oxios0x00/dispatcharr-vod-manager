@@ -345,6 +345,22 @@ class Store:
                 return None
             return set(json.loads(row["relation_ids"]))
 
+    def changed_content_ids(self, content_type, current_by_content):
+        """Ids from `current_by_content` ({content_id: set of relation ids})
+        that are new or whose relation set differs from the stored one, read
+        with a single query."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT content_id, relation_ids FROM known_relations WHERE content_type = ?",
+                (content_type,),
+            ).fetchall()
+        known = {row["content_id"]: set(json.loads(row["relation_ids"])) for row in rows}
+        return [
+            content_id
+            for content_id, relation_ids in current_by_content.items()
+            if known.get(content_id) != relation_ids
+        ]
+
     def set_known_relation_ids(self, content_type, content_id, relation_ids):
         with self._connect() as conn:
             conn.execute(

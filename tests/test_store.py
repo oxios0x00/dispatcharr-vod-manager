@@ -84,6 +84,19 @@ def test_known_relations_roundtrip():
     with_store(run)
 
 
+def test_changed_content_ids_flags_new_and_different_relation_sets():
+    def run(s):
+        s.set_known_relation_ids("movie", 1, {10, 11})
+        s.set_known_relation_ids("movie", 2, {20})
+        s.set_known_relation_ids("series", 1, {99})
+        current = {1: {10, 11}, 2: {20, 21}, 3: {30}}
+        assert sorted(s.changed_content_ids("movie", current)) == [2, 3]
+        # Another content type's rows never count as known.
+        assert s.changed_content_ids("series", {1: {99}}) == []
+
+    with_store(run)
+
+
 def test_migrated_old_rows_default_probe_version_to_zero():
     # An old row saved before probe_version existed must read back as 0
     # (older than any real PROBE_SCHEMA_VERSION), so the "stale cache,
