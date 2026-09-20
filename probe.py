@@ -11,6 +11,11 @@ approach was tested and fails on a meaningful fraction of real MP4s.
 import json
 import subprocess
 
+try:
+    from .probe_summary import summarize_probe
+except ImportError:  # imported as a top-level module by the unit tests
+    from probe_summary import summarize_probe
+
 # Bump whenever probe_stream()'s output shape changes in a way that
 # affects selection (new field, changed extraction logic) — a cached
 # probe row saved under an older version is treated as stale and
@@ -189,5 +194,5 @@ def probe_stream(url, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
         "audio_description_languages": ad_languages,
         "subtitle_languages": subtitle_languages,
         "duration_secs": duration,
-        "raw": data,
+        "summary": summarize_probe(data),
     }

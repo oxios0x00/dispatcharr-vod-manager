@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.6"
+    version = "1.0.7"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
