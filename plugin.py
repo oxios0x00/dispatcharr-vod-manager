@@ -74,7 +74,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.1.3"
+    version = "1.2.0"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -130,6 +130,16 @@ class Plugin:
             "help_text": (
                 "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. "
                 "ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
+            ),
+        },
+        {
+            "id": "exclude_unmatched_quality",
+            "label": "Exclude titles with none of the target qualities",
+            "type": "boolean",
+            "default": False,
+            "help_text": (
+                "OFF (default): a title with none of the qualities to keep still keeps its best available one. "
+                "ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
             ),
         },
         {
@@ -954,6 +964,7 @@ class Plugin:
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
+            exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
             dry_run = bool(settings.get("dry_run", True))
             batch_size = int(settings.get("batch_size", 25) or 25)
             max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
@@ -975,7 +986,7 @@ class Plugin:
                 futures = {
                     pool.submit(
                         self._process_one_movie, mid, target_qualities, target_languages,
-                        exclude_unmatched_language, dry_run, limiter,
+                        exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter,
                     ): mid
                     for mid in movie_ids
                 }
@@ -1025,7 +1036,7 @@ class Plugin:
             self.store.release_lock("process_movie_batch")
 
     def _process_one_movie(
-        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
+        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
     ):
         """Retry wrapper around _process_one_movie_once: under load, a
         worker thread's DB connection checkout can occasionally hit a
@@ -1036,19 +1047,19 @@ class Plugin:
         bug) is not this class of error and should surface immediately."""
         try:
             return self._process_one_movie_once(
-                movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
+                movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
             )
         except Exception as exc:
             if "would block forever" not in str(exc):
                 raise
             return self._process_one_movie_once(
-                movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
+                movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
             )
         finally:
             _release_db_connections()
 
     def _process_one_movie_once(
-        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, dry_run, limiter
+        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
     ):
         """Probe every active relation for one movie, select winners, prune
         losers (unless dry_run). Returns the number of relations pruned
@@ -1101,7 +1112,7 @@ class Plugin:
             # guessing a winner with zero data.
             raise RuntimeError(f"movie {movie_id}: no relation could be probed")
 
-        winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language)
+        winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality)
         winner_ids = {c.relation_id for c in winners}
         all_ids = {r.id for r in relations}
         loser_ids = all_ids - winner_ids
@@ -1275,6 +1286,7 @@ class Plugin:
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
+            exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
             episode_sampling = settings.get("episode_sampling") or "first_only"
             episode_sample_size = int(settings.get("episode_sample_size", 2) or 2)
             dry_run = bool(settings.get("dry_run", True))
@@ -1298,7 +1310,7 @@ class Plugin:
                 futures = {
                     pool.submit(
                         self._process_one_series, sid, target_qualities, target_languages,
-                        exclude_unmatched_language, episode_sampling, episode_sample_size, dry_run, limiter,
+                        exclude_unmatched_language, exclude_unmatched_quality, episode_sampling, episode_sample_size, dry_run, limiter,
                     ): sid
                     for sid in series_ids
                 }
@@ -1348,7 +1360,7 @@ class Plugin:
             self.store.release_lock("process_series_batch")
 
     def _process_one_series(
-        self, series_id, target_qualities, target_languages, exclude_unmatched_language,
+        self, series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
         episode_sampling, episode_sample_size, dry_run, limiter,
     ):
         """Retry wrapper — see _process_one_movie for why: a worker
@@ -1356,21 +1368,21 @@ class Plugin:
         gevent scheduling error unrelated to the series itself."""
         try:
             return self._process_one_series_once(
-                series_id, target_qualities, target_languages, exclude_unmatched_language,
+                series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
                 episode_sampling, episode_sample_size, dry_run, limiter,
             )
         except Exception as exc:
             if "would block forever" not in str(exc):
                 raise
             return self._process_one_series_once(
-                series_id, target_qualities, target_languages, exclude_unmatched_language,
+                series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
                 episode_sampling, episode_sample_size, dry_run, limiter,
             )
         finally:
             _release_db_connections()
 
     def _process_one_series_once(
-        self, series_id, target_qualities, target_languages, exclude_unmatched_language,
+        self, series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
         episode_sampling, episode_sample_size, dry_run, limiter,
     ):
         """For one series: ensure every active source's episode list is
@@ -1496,7 +1508,7 @@ class Plugin:
                 episodes_with_no_candidates += 1
                 continue
 
-            winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language)
+            winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality)
             winner_ids = {c.relation_id for c in winners}
             all_ids = {r.id for r in ep_relations}
             loser_ids = all_ids - winner_ids

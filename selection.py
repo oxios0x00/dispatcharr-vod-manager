@@ -114,7 +114,10 @@ def _best_available_tier(by_tier):
     return next(iter(by_tier))
 
 
-def select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language=False):
+def select_winners(
+    candidates, target_languages, target_qualities, exclude_unmatched_language=False,
+    exclude_unmatched_quality=False,
+):
     """Return the list of winning Candidates for one title.
 
     candidates: list[Candidate], must be non-empty.
@@ -123,6 +126,9 @@ def select_winners(candidates, target_languages, target_qualities, exclude_unmat
         preferred first. A tier absent from this title's candidates is
         simply skipped; if *none* of them are present, the title falls
         back to its single best available tier rather than being dropped.
+    exclude_unmatched_quality: when none of target_qualities is present, the
+        title yields no winner instead of falling back to its best tier — an
+        explicit opt-in to dropping titles with nothing in the wanted tiers.
     exclude_unmatched_language: see _select_within_pool. Applied
         independently per tier (and to the fallback-tier pick when no
         requested tier is present) — a title can end up with an empty
@@ -140,6 +146,8 @@ def select_winners(candidates, target_languages, target_qualities, exclude_unmat
     requested_tiers = [q for q in (target_qualities or []) if q in by_tier]
 
     if not requested_tiers:
+        if exclude_unmatched_quality and target_qualities:
+            return []
         fallback_tier = _best_available_tier(by_tier)
         return _select_within_pool(by_tier[fallback_tier], target_languages, exclude_unmatched_language)
 

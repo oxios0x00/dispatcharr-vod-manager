@@ -181,3 +181,28 @@ if __name__ == "__main__":
             print(f"FAIL {t.__name__}: {e}")
     print(f"\n{len(tests) - failures}/{len(tests)} passed")
     sys.exit(1 if failures else 0)
+
+
+def test_exclude_unmatched_quality_drops_a_title_with_none_of_the_target_tiers():
+    candidates = [
+        Candidate(1, ["fr"], "720p", bitrate=3_000_000),
+        Candidate(2, ["fr"], "480p", bitrate=1_000_000),
+    ]
+    assert select_winners(candidates, TARGET_LANGUAGES, ["2160p", "1080p"]) != []
+    winners = select_winners(candidates, TARGET_LANGUAGES, ["2160p", "1080p"], exclude_unmatched_quality=True)
+    assert winners == []
+
+
+def test_exclude_unmatched_quality_keeps_a_title_with_one_target_tier():
+    candidates = [
+        Candidate(1, ["fr"], "1080p", bitrate=5_000_000),
+        Candidate(2, ["fr"], "720p", bitrate=3_000_000),
+    ]
+    winners = select_winners(candidates, TARGET_LANGUAGES, ["2160p", "1080p"], exclude_unmatched_quality=True)
+    assert ids(winners) == [1]
+
+
+def test_exclude_unmatched_quality_is_a_noop_without_target_qualities():
+    candidates = [Candidate(1, ["fr"], "720p", bitrate=3_000_000)]
+    winners = select_winners(candidates, TARGET_LANGUAGES, [], exclude_unmatched_quality=True)
+    assert ids(winners) == [1]
