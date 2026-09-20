@@ -591,6 +591,36 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM run_locks WHERE name = ?", (name,))
 
+    def lock_held_since(self, name, stale_after=3600):
+        """Start (or last renewal) time of a live lock, or None when it is
+        free or has gone stale."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT started_at FROM run_locks WHERE name = ?", (name,)
+            ).fetchone()
+        if row is None or row["started_at"] < time.time() - stale_after:
+            return None
+        return row["started_at"]
+
+    def renew_lock(self, name):
+        """Restart a held lock's staleness clock. A long run calls this
+        between batches so that only one that has really died goes stale."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE run_locks SET started_at = ? WHERE name = ?", (time.time(), name)
+            )
+
+    def requeue_in_progress(self, content_type):
+        """Put back titles a run claimed but never finished (Dispatcharr was
+        restarted mid-batch). Only call while holding the lock that keeps
+        another run from working the same queue. Returns how many."""
+        with self._connect() as conn:
+            return conn.execute(
+                "UPDATE probe_queue SET status = 'pending', updated_at = ? "
+                "WHERE content_type = ? AND status = 'in_progress'",
+                (time.time(), content_type),
+            ).rowcount
+
     # --- orphan cleanup (rows for titles/relations Dispatcharr deleted) ----
 
     @staticmethod

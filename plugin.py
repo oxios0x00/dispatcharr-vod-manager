@@ -31,7 +31,7 @@ CONTENT_TYPE_EPISODE = "episode"
 def _release_db_connections():
     """Hands this thread's database connection back to Dispatcharr's pool.
 
-    Each Process Batch runs its per-title work in a ThreadPoolExecutor. Under
+    Each batch runs its per-title work in a ThreadPoolExecutor. Under
     Dispatcharr's gevent pool (MAX_CONNS = 8 per web worker) every such
     thread checks a connection out on its first query and, unlike the request
     greenlet, nobody returns it: Dispatcharr only calls close_old_connections()
@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.9"
+    version = "1.1.0"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -133,7 +133,7 @@ class Plugin:
         },
         {
             "id": "batch_size",
-            "label": "Batch size (movies per click)",
+            "label": "Batch size (movies per batch)",
             "type": "number",
             "default": 25,
             "min": 1,
@@ -176,7 +176,7 @@ class Plugin:
         },
         {
             "id": "series_batch_size",
-            "label": "Batch size (series per click)",
+            "label": "Batch size (series per batch)",
             "type": "number",
             "default": 5,
             "min": 1,
@@ -240,7 +240,7 @@ class Plugin:
                 "Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, "
                 "Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a "
                 "pruned/removed relation's file is deleted automatically (only files this plugin tracks — "
-                "nothing added by hand is touched). Recommended order: Scan, then Process Batch repeatedly "
+                "nothing added by hand is touched). Recommended order: Scan + Process "
                 "until Queue Status reads 0 pending and 0 in progress, then Clean Titles, then Generate. "
                 "Both Generate actions refuse to run at all while their queue still has pending or "
                 "in-progress items, precisely to prevent that ordering mistake — generating too early would "
@@ -341,14 +341,12 @@ class Plugin:
             "type": "select",
             "default": "scan_and_process",
             "options": [
-                {"value": "scan_and_process", "label": "Scan + Process Batch (recommended)"},
+                {"value": "scan_and_process", "label": "Scan + Process Movies (recommended)"},
                 {"value": "scan_movies", "label": "Scan Movies only"},
-                {"value": "process_batch", "label": "Process Batch only"},
                 {"value": "clean_movie_titles", "label": "Clean Movie Titles only"},
                 {"value": "clean_series_titles", "label": "Clean Series Titles only"},
                 {"value": "scan_and_process_series", "label": "Scan + Process Series (recommended)"},
                 {"value": "scan_series", "label": "Scan Series only"},
-                {"value": "process_series", "label": "Process Series Batch only"},
                 {"value": "retry_empty_series_fetches", "label": "Retry Empty Series Episode Fetches only"},
                 {"value": "generate_movie_strm", "label": "Generate Movie .strm Files only"},
                 {"value": "generate_series_strm", "label": "Generate Series .strm Files only"},
@@ -361,7 +359,7 @@ class Plugin:
         {
             "id": "scan_and_process",
             "label": "[MOVIES] Scan + Process",
-            "description": "One click: scan for changed movies, then probe/select/prune the batch. Refuses to start a second one while an earlier click is still processing.",
+            "description": "Starts a background run: scans for changed movies, then probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -375,17 +373,9 @@ class Plugin:
             "button_color": "blue",
         },
         {
-            "id": "process_batch",
-            "label": "[MOVIES] Process Batch",
-            "description": "Probe + select + (unless Dry Run) prune the next queued batch. Refuses to start a second one while an earlier click is still processing.",
-            "button_label": "Process",
-            "button_variant": "outline",
-            "button_color": "blue",
-        },
-        {
             "id": "queue_status",
             "label": "[MOVIES] Queue Status",
-            "description": "Pending/in-progress/done/error counts and the last run.",
+            "description": "Whether a run is in progress, pending/in-progress/done/error counts and the last batch.",
             "button_label": "Status",
             "button_variant": "outline",
             "button_color": "blue",
@@ -393,7 +383,7 @@ class Plugin:
         {
             "id": "pause_queue",
             "label": "[MOVIES] Pause Queue",
-            "description": "Stop Process Batch until resumed.",
+            "description": "Stops a running Scan + Process after its current batch, and keeps Scan + Process from processing until resumed.",
             "button_label": "Pause",
             "button_variant": "outline",
             "button_color": "orange",
@@ -417,7 +407,7 @@ class Plugin:
         {
             "id": "generate_movie_strm",
             "label": "[MOVIES] Generate .strm Files",
-            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Batch first.",
+            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -425,7 +415,7 @@ class Plugin:
         {
             "id": "scan_and_process_series",
             "label": "[SERIES] Scan + Process",
-            "description": "One click: scan for changed series, then probe/select/prune per episode. Refuses to start a second one while an earlier click is still processing.",
+            "description": "Starts a background run: scans for changed series, then fetches episodes if needed and probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -439,17 +429,9 @@ class Plugin:
             "button_color": "blue",
         },
         {
-            "id": "process_series",
-            "label": "[SERIES] Process Batch",
-            "description": "Fetch each queued series' episodes if needed, then probe/select/prune. Refuses to start a second one while an earlier click is still processing.",
-            "button_label": "Process",
-            "button_variant": "outline",
-            "button_color": "blue",
-        },
-        {
             "id": "series_queue_status",
             "label": "[SERIES] Queue Status",
-            "description": "Pending/in-progress/done/error counts and the last run, for series.",
+            "description": "Whether a run is in progress, pending/in-progress/done/error counts and the last batch, for series.",
             "button_label": "Status",
             "button_variant": "outline",
             "button_color": "blue",
@@ -457,7 +439,7 @@ class Plugin:
         {
             "id": "pause_series_queue",
             "label": "[SERIES] Pause Queue",
-            "description": "Stop Process Series Batch until resumed. Independent of the Movies pause.",
+            "description": "Stops a running Scan + Process after its current batch, and keeps Scan + Process from processing until resumed. Independent of the Movies pause.",
             "button_label": "Pause",
             "button_variant": "outline",
             "button_color": "orange",
@@ -473,7 +455,7 @@ class Plugin:
         {
             "id": "retry_empty_series_fetches",
             "label": "[SERIES] Retry Empty Episode Fetches",
-            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty or incomplete one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way — zero episodes, or fewer than the provider actually lists (checked with one provider call per suspicious relation, at most 60 per click, click again for the rest) — and re-queues their series for a fresh attempt on the next Process Series Batch. Capped at 3 retries per relation so a title that's genuinely short on the provider's side doesn't get retried forever.",
+            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty or incomplete one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way — zero episodes, or fewer than the provider actually lists (checked with one provider call per suspicious relation, at most 60 per click, click again for the rest) — and re-queues their series for a fresh attempt on the next Scan + Process. Capped at 3 retries per relation so a title that's genuinely short on the provider's side doesn't get retried forever.",
             "button_label": "Retry Empty Fetches",
             "button_variant": "outline",
             "button_color": "orange",
@@ -489,7 +471,7 @@ class Plugin:
         {
             "id": "generate_series_strm",
             "label": "[SERIES] Generate .strm Files",
-            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Process Series Batch first.",
+            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -505,7 +487,7 @@ class Plugin:
         {
             "id": "reprobe_by_stream_id",
             "label": "[MAINTENANCE] Force Re-probe by Stream ID",
-            "description": "Clears the cached probe for one relation (movie or episode) and re-queues its title, using the Stream ID above. Click Process Batch/Series afterward to actually redo it.",
+            "description": "Clears the cached probe for one relation (movie or episode) and re-queues its title, using the Stream ID above. Run Scan + Process afterward to actually redo it.",
             "button_label": "Re-probe",
             "button_variant": "outline",
             "button_color": "orange",
@@ -541,7 +523,7 @@ class Plugin:
             "confirm": {
                 "required": True,
                 "title": "Reset all plugin state?",
-                "message": "Clears every probe result and queue this plugin has recorded — the next Process Batch/Series will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched.",
+                "message": "Clears every probe result and queue this plugin has recorded — the next Scan + Process will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched.",
             },
         },
         {
@@ -597,14 +579,14 @@ class Plugin:
     def run(self, action_id, params, context):
         settings = context.get("settings", {})
         scheduled = bool(context.get("scheduled"))
+        if action_id in self._BACKGROUND_ACTIONS and not context.get("background"):
+            return self._start_background(action_id, settings, scheduled)
         if action_id == "clean_movie_titles":
             return self._clean_movie_titles(settings)
         if action_id == "clean_series_titles":
             return self._clean_series_titles(settings)
         if action_id == "scan_movies":
             return self._scan_movies(settings)
-        if action_id == "process_batch":
-            return self._process_batch(settings)
         if action_id == "scan_and_process":
             return self._scan_and_process(settings, scheduled=scheduled)
         if action_id == "queue_status":
@@ -617,8 +599,6 @@ class Plugin:
             return {"status": "ok", "message": "Queue resumed."}
         if action_id == "scan_series":
             return self._scan_series(settings)
-        if action_id == "process_series":
-            return self._process_series_batch(settings)
         if action_id == "scan_and_process_series":
             return self._scan_and_process_series(settings, scheduled=scheduled)
         if action_id == "series_queue_status":
@@ -655,40 +635,144 @@ class Plugin:
             return self._test_fire_schedule(settings)
         return {"status": "error", "message": f"Unknown action '{action_id}'"}
 
-    def _busy_lock_message(self, human_name, held_since):
-        """A re-click or an automatic retry landed on a second uwsgi worker
-        while the first invocation was still running — without this, both
-        would run to completion in parallel, each pinning its own worker
-        for the whole batch, which is exactly what starved every other
-        worker and made the whole UI look frozen during the 2026-09-18
-        production incident. held_since comes from Store.try_acquire_lock;
-        the message doubles as an explanation for why a fresh restart
-        doesn't need a manual unlock (see that method's stale_after)."""
+    def _busy_lock_message(self, human_name, held_since, stale_after=3600):
+        """A re-click or an automatic retry found the same action still
+        running — without this, both would run to completion in parallel and
+        pin a worker each for the whole batch, which is what made the whole
+        UI look frozen during the 2026-09-18 production incident. held_since
+        comes from Store.try_acquire_lock or lock_held_since; a lock left by
+        a run that died clears itself after stale_after seconds."""
         elapsed = int(time.time() - held_since) if held_since else 0
+        minutes = max(1, stale_after // 60)
         return {
             "status": "error",
             "message": (
-                f"{human_name} is already running (started {elapsed}s ago) — wait for it to "
+                f"{human_name} is already running (last activity {elapsed}s ago) — wait for it to "
                 "finish, or check Queue Status for progress, before starting another. If "
-                "Dispatcharr restarted while one was running, this clears itself automatically "
-                "after an hour."
+                f"Dispatcharr restarted while one was running, this clears itself automatically "
+                f"after {minutes} minutes without activity."
             ),
         }
 
+    # --- background runs -----------------------------------------------------
+    #
+    # Scan + Process runs in a Celery worker, not in the request that clicked
+    # it: probing a batch takes minutes, longer than the browser (about a
+    # minute here) or nginx (300 s) will wait, so a synchronous click ended
+    # in a 504 while the work carried on unseen. The click now only queues the
+    # task; Queue Status shows how far it got and Pause Queue stops it after
+    # the current batch.
+
+    _BACKGROUND_ACTIONS = {
+        "scan_and_process": CONTENT_TYPE_MOVIE,
+        "scan_and_process_series": CONTENT_TYPE_SERIES,
+    }
+    # A run renews its lock between batches; a lock that has been silent this
+    # long belongs to a run that died with its worker.
+    _PIPELINE_LOCK_STALE_SECONDS = 900
+
+    @staticmethod
+    def _pipeline_lock(content_type):
+        return f"scan_and_process_{content_type}"
+
+    def _enqueue_background(self, action, settings, scheduled):
+        """Queue `action` on the Celery worker. Returns (task_id, None), or
+        (None, error_result) when it cannot be queued."""
+        task_fn = globals().get("_vod_manager_scheduled_run")
+        if task_fn is None:
+            return None, {
+                "status": "error",
+                "message": "Background task failed to register at plugin load — check server logs.",
+            }
+        snapshot = {k: v for k, v in (settings or {}).items() if not k.startswith("schedule_")}
+        try:
+            async_result = task_fn.apply_async(
+                kwargs={"action": action, "settings": snapshot, "scheduled": scheduled}, queue="dvr"
+            )
+        except Exception as e:
+            return None, {"status": "error", "message": f"Failed to queue the background run: {e}"}
+        return async_result.id, None
+
+    def _start_background(self, action_id, settings, scheduled):
+        content_type = self._BACKGROUND_ACTIONS[action_id]
+        held_since = self.store.lock_held_since(
+            self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
+        )
+        if held_since:
+            return self._busy_lock_message(
+                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS
+            )
+        _, error = self._enqueue_background(action_id, settings, scheduled)
+        if error:
+            return error
+        return {
+            "status": "ok",
+            "message": (
+                "Scan + Process started in the background. It runs until the queue is empty. "
+                "Click Queue Status to follow it, Pause Queue to stop it after the current batch."
+            ),
+        }
+
+    def _run_pipeline(self, content_type, unit, settings, scheduled, clean, scan, process, generate):
+        """Scan, then process batches until the queue is empty, paused (by
+        hand or by the circuit breaker) or a batch cannot start."""
+        import logging
+
+        logger = logging.getLogger("vod_manager.pipeline")
+        lock = self._pipeline_lock(content_type)
+        acquired, held_since = self.store.try_acquire_lock(
+            lock, stale_after=self._PIPELINE_LOCK_STALE_SECONDS
+        )
+        if not acquired:
+            return self._busy_lock_message(
+                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS
+            )
+        try:
+            parts = []
+            # Holding the lock means no other run is working this queue, so
+            # anything still in progress was cut short by a restart.
+            recovered = self.store.requeue_in_progress(content_type)
+            if recovered:
+                parts.append(f"Recovered {recovered} {unit} left in progress by an interrupted run.")
+            if settings.get("auto_clean_titles"):
+                parts.append(clean(settings).get("message", ""))
+            parts.append(scan(settings).get("message", ""))
+
+            totals = {"processed": 0, "errors": 0, "pruned": 0}
+            stop_message = ""
+            while True:
+                self.store.renew_lock(lock)
+                # Hand this thread's connection back between batches, as the
+                # batch threads do, so a long run never pins one.
+                _release_db_connections()
+                result = process(settings)
+                if not result.get("processed"):
+                    stop_message = result.get("message", "")
+                    break
+                for key in totals:
+                    totals[key] += result[key]
+
+            dry_run = bool(settings.get("dry_run", True))
+            parts.append(
+                f"Processed {totals['processed']} {unit} ({totals['errors']} errors), "
+                f"{'would prune' if dry_run else 'pruned'} {totals['pruned']}."
+            )
+            if stop_message and not stop_message.startswith("Nothing queued"):
+                parts.append(stop_message)
+            if scheduled and settings.get("auto_generate_strm"):
+                parts.append(generate(settings).get("message", ""))
+            self._catalog_stats(settings)
+            message = " | ".join(part for part in parts if part)
+            logger.info("Scan + Process (%s) finished: %s", content_type, message)
+            return {"status": "ok", "message": message}
+        finally:
+            self.store.release_lock(lock)
+
     def _scan_and_process(self, settings, scheduled=False):
-        parts = []
-        if settings.get("auto_clean_titles"):
-            clean_result = self._clean_movie_titles(settings)
-            parts.append(clean_result.get("message", ""))
-        scan_result = self._scan_movies(settings)
-        batch_result = self._process_batch(settings)
-        parts.append(scan_result.get("message", ""))
-        parts.append(batch_result.get("message", ""))
-        if scheduled and settings.get("auto_generate_strm"):
-            strm_result = self._generate_movie_strm(settings)
-            parts.append(strm_result.get("message", ""))
-        self._catalog_stats(settings)
-        return {"status": "ok", "message": " | ".join(parts)}
+        return self._run_pipeline(
+            CONTENT_TYPE_MOVIE, "movies", settings, scheduled,
+            self._clean_movie_titles, self._scan_movies, self._process_batch, self._generate_movie_strm,
+        )
 
     # --- title cleanup (cosmetic, independent of selection) -----------------
 
@@ -842,7 +926,10 @@ class Plugin:
             )
             if breaker_tripped:
                 msg += " Error rate too high — queue auto-paused."
-            return {"status": "ok", "message": msg}
+            return {
+                "status": "ok", "message": msg,
+                "processed": processed, "errors": errors, "pruned": pruned_total,
+            }
         finally:
             self.store.release_lock("process_movie_batch")
 
@@ -1066,7 +1153,7 @@ class Plugin:
         msg = (
             f"Reset {reset_empty + reset_partial} relation(s) across {len(series_to_requeue)} series "
             f"({reset_empty} empty, {reset_partial} partial) — re-queued for a fresh fetch on the "
-            "next Process Series Batch."
+            "next Scan + Process."
         )
         if unchecked:
             msg += f" {unchecked} more suspicious relation(s) not checked yet (limit {self._MAX_PROVIDER_CHECKS} provider calls per click) — click again."
@@ -1077,19 +1164,10 @@ class Plugin:
         return {"status": "ok", "message": msg}
 
     def _scan_and_process_series(self, settings, scheduled=False):
-        parts = []
-        if settings.get("auto_clean_titles"):
-            clean_result = self._clean_series_titles(settings)
-            parts.append(clean_result.get("message", ""))
-        scan_result = self._scan_series(settings)
-        batch_result = self._process_series_batch(settings)
-        parts.append(scan_result.get("message", ""))
-        parts.append(batch_result.get("message", ""))
-        if scheduled and settings.get("auto_generate_strm"):
-            strm_result = self._generate_series_strm(settings)
-            parts.append(strm_result.get("message", ""))
-        self._catalog_stats(settings)
-        return {"status": "ok", "message": " | ".join(parts)}
+        return self._run_pipeline(
+            CONTENT_TYPE_SERIES, "series", settings, scheduled,
+            self._clean_series_titles, self._scan_series, self._process_series_batch, self._generate_series_strm,
+        )
 
     # --- series: process batch --------------------------------------------
 
@@ -1156,7 +1234,10 @@ class Plugin:
             )
             if breaker_tripped:
                 msg += " Error rate too high — queue auto-paused."
-            return {"status": "ok", "message": msg}
+            return {
+                "status": "ok", "message": msg,
+                "processed": processed, "errors": errors, "pruned": pruned_total,
+            }
         finally:
             self.store.release_lock("process_series_batch")
 
@@ -1337,8 +1418,14 @@ class Plugin:
         counts = self.store.queue_counts(content_type)
         last = self.store.last_run(content_type)
         paused = self.store.is_paused(content_type)
+        running_since = self.store.lock_held_since(
+            self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
+        )
+        running = (
+            f"[RUNNING, last activity {int(time.time() - running_since)}s ago] " if running_since else ""
+        )
         msg = (
-            f"pending={counts['pending']} in_progress={counts['in_progress']} "
+            f"{running}pending={counts['pending']} in_progress={counts['in_progress']} "
             f"done={counts['done']} error={counts['error']}"
             f"{' [PAUSED]' if paused else ''}"
         )
@@ -1447,7 +1534,7 @@ class Plugin:
                     "status": "error",
                     "message": (
                         f"{queue['pending']} movie(s) pending, {queue['in_progress']} in progress — "
-                        "finish Process Batch first (Queue Status should read 0 pending and 0 in "
+                        "finish Scan + Process first (Queue Status should read 0 pending and 0 in "
                         "progress). Generating now would give still-unprobed titles a '- unprobed' "
                         "filename and write a file for a relation that's about to be pruned, only for "
                         "it to disappear on the next Generate run."
@@ -1547,7 +1634,7 @@ class Plugin:
                     "status": "error",
                     "message": (
                         f"{queue['pending']} series pending, {queue['in_progress']} in progress — "
-                        "finish Process Series Batch first (Series Queue Status should read 0 pending "
+                        "finish Scan + Process first (Series Queue Status should read 0 pending "
                         "and 0 in progress). Generating now would give still-unprobed titles a "
                         "'- unprobed' filename and write a file for a relation that's about to be "
                         "pruned, only for it to disappear on the next Generate run."
@@ -1747,8 +1834,8 @@ class Plugin:
         stream_id after this plugin already probed and classified it (a
         real incident, not theoretical): clears just that one relation's
         cached probe and re-queues its movie/series, without touching anything
-        else in the catalogue. Does not itself re-probe — Process Batch /
-        Process Series Batch does that on the next click, same as any other
+        else in the catalogue. Does not itself re-probe — Scan + Process
+        does that on the next run, same as any other
         queued title."""
         from apps.vod.models import M3UMovieRelation, M3UEpisodeRelation
 
@@ -1771,7 +1858,7 @@ class Plugin:
                 "status": "ok",
                 "message": (
                     f"Cleared cached probe for '{movie_rel.movie.name}' and re-queued it — "
-                    "click Process Batch to re-probe."
+                    "run Scan + Process to re-probe."
                 ),
             }
 
@@ -1787,7 +1874,7 @@ class Plugin:
                 "status": "ok",
                 "message": (
                     f"Cleared cached probe for one relation of '{episode_rel.episode.series.name}' "
-                    "and re-queued the series — click Process Series Batch to re-probe (other "
+                    "and re-queued the series — run Scan + Process to re-probe (other "
                     "episodes keep using their own existing cache)."
                 ),
             }
@@ -1808,12 +1895,10 @@ class Plugin:
     _VALID_SCHEDULE_TARGETS = (
         "scan_and_process",
         "scan_movies",
-        "process_batch",
         "clean_movie_titles",
         "clean_series_titles",
         "scan_and_process_series",
         "scan_series",
-        "process_series",
         "generate_movie_strm",
         "generate_series_strm",
         "retry_empty_series_fetches",
@@ -1924,26 +2009,12 @@ class Plugin:
         if target not in self._VALID_SCHEDULE_TARGETS:
             return {"status": "error", "message": f"Invalid schedule_target: {target}"}
 
-        snapshot = {k: v for k, v in (settings or {}).items() if not k.startswith("schedule_")}
-
-        # _vod_manager_scheduled_run is defined at module level below this
-        # class; resolved by name at call time, not import time, so no
-        # forward-reference issue — but registration can fail (e.g. Celery
-        # not importable), in which case the name won't exist at all.
-        task_fn = globals().get("_vod_manager_scheduled_run")
-        if task_fn is None:
-            return {"status": "error", "message": "Scheduled Celery task failed to register at plugin load — check server logs."}
-
-        try:
-            async_result = task_fn.apply_async(
-                kwargs={"action": target, "settings": snapshot}, queue="dvr"
-            )
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to enqueue test fire on Celery: {e}"}
-
+        task_id, error = self._enqueue_background(target, settings, scheduled=True)
+        if error:
+            return error
         return {
             "status": "ok",
-            "message": f"Test fire enqueued ({target}); task id {async_result.id}. Check Schedule Status once the worker finishes.",
+            "message": f"Test fire enqueued ({target}); task id {task_id}. Check Schedule Status once the worker finishes.",
         }
 
 
@@ -1956,11 +2027,16 @@ try:
     from celery import shared_task as _vod_manager_shared_task
 
     @_vod_manager_shared_task(name=Plugin.SCHEDULED_TASK_CELERY_NAME)
-    def _vod_manager_scheduled_run(action="scan_and_process", settings=None):
+    def _vod_manager_scheduled_run(action="scan_and_process", settings=None, scheduled=True):
         import logging
 
         logger = logging.getLogger("vod_manager.schedule")
-        result = Plugin().run(action, {}, {"logger": logger, "settings": settings or {}, "scheduled": True})
+        result = Plugin().run(
+            action, {},
+            {"logger": logger, "settings": settings or {}, "scheduled": scheduled, "background": True},
+        )
+        if not scheduled:
+            return result
         try:
             from django.utils import timezone
             from django_celery_beat.models import PeriodicTask
