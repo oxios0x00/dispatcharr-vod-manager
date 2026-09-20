@@ -74,7 +74,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.2.0"
+    version = "1.2.1"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -116,6 +116,16 @@ class Plugin:
             ),
         },
         {
+            "id": "exclude_unmatched_quality",
+            "label": "Exclude titles with none of the target qualities",
+            "type": "boolean",
+            "default": False,
+            "help_text": (
+                "OFF (default): a title with none of the qualities to keep still keeps its best available one. "
+                "ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
+            ),
+        },
+        {
             "id": "target_languages",
             "label": "Target languages (ISO 639-2, e.g. fre,eng)",
             "type": "string",
@@ -130,16 +140,6 @@ class Plugin:
             "help_text": (
                 "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. "
                 "ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
-            ),
-        },
-        {
-            "id": "exclude_unmatched_quality",
-            "label": "Exclude titles with none of the target qualities",
-            "type": "boolean",
-            "default": False,
-            "help_text": (
-                "OFF (default): a title with none of the qualities to keep still keeps its best available one. "
-                "ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
             ),
         },
         {

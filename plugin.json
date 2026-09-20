@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -20,6 +20,13 @@
       "help_text": "Comma-separated, best first. Keeps one relation per listed tier the title actually has (e.g. one 2160p + one 1080p), never eliminates a title for lacking a tier. If none of the tiers match, falls back to the best quality available."
     },
     {
+      "id": "exclude_unmatched_quality",
+      "label": "Exclude titles with none of the target qualities",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): a title with none of the qualities to keep still keeps its best available one. ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
+    },
+    {
       "id": "target_languages",
       "label": "Target languages (ISO 639-2, e.g. fre,eng)",
       "type": "string",
@@ -32,13 +39,6 @@
       "type": "boolean",
       "default": false,
       "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
-    },
-    {
-      "id": "exclude_unmatched_quality",
-      "label": "Exclude titles with none of the target qualities",
-      "type": "boolean",
-      "default": false,
-      "help_text": "OFF (default): a title with none of the qualities to keep still keeps its best available one. ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
     },
     {
       "id": "batch_size",
