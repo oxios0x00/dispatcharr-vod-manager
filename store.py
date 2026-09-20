@@ -16,9 +16,9 @@ import time
 from contextlib import contextmanager
 
 try:
-    from .probe_summary import dumps_compact, summarize_probe
+    from .probe_summary import dumps_compact
 except ImportError:  # imported as a top-level module by the unit tests
-    from probe_summary import dumps_compact, summarize_probe
+    from probe_summary import dumps_compact
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS probe_queue (
@@ -197,61 +197,6 @@ class Store:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             self._run_migrations(conn)
-            self._compact_stored_raw_json(conn)
-        self._vacuum_once()
-
-    def _flag_set(self, conn, key):
-        return conn.execute("SELECT 1 FROM plugin_state WHERE key = ?", (key,)).fetchone() is not None
-
-    def _set_flag(self, conn, key):
-        conn.execute(
-            "INSERT INTO plugin_state (key, value) VALUES (?, 'true') "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key,),
-        )
-
-    def _compact_stored_raw_json(self, conn):
-        """One-time: raw_json used to hold ffprobe's entire output (about
-        38 KB a row, 97 of the 110 MB the file had reached) and nothing ever
-        read it. Rewrites each such row as the compact summary built from
-        that same output, so what a future feature might want is kept at a
-        fraction of the size; a row whose JSON can't be parsed is emptied."""
-        if self._flag_set(conn, "raw_json_compacted"):
-            return
-        rows = conn.execute(
-            "SELECT content_type, relation_id, raw_json FROM relation_probes "
-            "WHERE raw_json IS NOT NULL AND length(raw_json) > 4000"
-        ).fetchall()
-        updates = []
-        for row in rows:
-            try:
-                compact = dumps_compact(summarize_probe(json.loads(row["raw_json"])))
-            except (TypeError, ValueError):
-                compact = None
-            updates.append((compact, row["content_type"], row["relation_id"]))
-        conn.executemany(
-            "UPDATE relation_probes SET raw_json = ? WHERE content_type = ? AND relation_id = ?",
-            updates,
-        )
-        self._set_flag(conn, "raw_json_compacted")
-
-    def _vacuum_once(self):
-        """One-time VACUUM after the compaction above, since SQLite never
-        shrinks the file on its own. It needs the whole database to itself,
-        so if a batch is writing at that moment it is skipped and retried at
-        the next start."""
-        try:
-            with self._connect() as conn:
-                if self._flag_set(conn, "raw_json_vacuumed"):
-                    return
-            raw = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
-            try:
-                raw.execute("VACUUM")
-                raw.execute("INSERT OR REPLACE INTO plugin_state (key, value) VALUES ('raw_json_vacuumed', 'true')")
-            finally:
-                raw.close()
-        except sqlite3.OperationalError:
-            pass
 
     def _run_migrations(self, conn):
         # Simple ADD COLUMN migrations must run first: the structural
