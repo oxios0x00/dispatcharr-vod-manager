@@ -345,6 +345,60 @@ def test_reset_all_also_clears_locks():
     with_store(run)
 
 
+def _seed_orphan_fixture(s):
+    for content_type, ids in (("movie", (1, 2, 3)), ("series", (10, 11))):
+        for cid in ids:
+            s.enqueue(content_type, cid)
+            s.set_known_relation_ids(content_type, cid, {cid * 100})
+    for rid in (100, 101, 102):
+        s.save_probe("movie", rid, {"ok": True, "quality_label": "1080p"})
+    for rid in (100, 555):
+        s.save_probe("episode", rid, {"ok": True, "quality_label": "720p"})
+
+
+def test_stored_content_ids_covers_queue_and_known_relations():
+    def run(s):
+        _seed_orphan_fixture(s)
+        s.enqueue("movie", 4)  # queued but never given a known-relations row
+        assert s.stored_content_ids("movie") == {1, 2, 3, 4}
+        assert s.stored_content_ids("series") == {10, 11}
+
+    with_store(run)
+
+
+def test_delete_content_rows_removes_only_the_given_titles_of_that_type():
+    def run(s):
+        _seed_orphan_fixture(s)
+        queue, known = s.delete_content_rows("movie", {2, 3, 99})
+        assert (queue, known) == (2, 2)
+        assert s.stored_content_ids("movie") == {1}
+        assert s.stored_content_ids("series") == {10, 11}  # same ids under another type untouched
+
+    with_store(run)
+
+
+def test_delete_probe_rows_is_scoped_to_content_type_and_ids():
+    def run(s):
+        _seed_orphan_fixture(s)
+        assert s.stored_probe_ids("movie") == {100, 101, 102}
+        assert s.delete_probe_rows("movie", {101, 102}) == 2
+        assert s.stored_probe_ids("movie") == {100}
+        assert s.stored_probe_ids("episode") == {100, 555}  # episode 100 is not movie 100
+
+    with_store(run)
+
+
+def test_deleting_more_ids_than_sqlite_allows_in_one_statement():
+    def run(s):
+        for i in range(2500):
+            s.enqueue("movie", i)
+        queue, _ = s.delete_content_rows("movie", set(range(2400)))
+        assert queue == 2400
+        assert s.stored_content_ids("movie") == set(range(2400, 2500))
+
+    with_store(run)
+
+
 if __name__ == "__main__":
     tests = [obj for name, obj in list(globals().items()) if name.startswith("test_")]
     failures = 0

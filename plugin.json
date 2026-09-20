@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -437,6 +437,14 @@
         "title": "Delete every .strm file?",
         "message": "Removes all files under the configured Movies/Series .strm subfolders. Your media server will lose them until the next Generate. This does not touch Dispatcharr's own catalogue."
       }
+    },
+    {
+      "id": "prune_orphaned_state",
+      "label": "[MAINTENANCE] Prune Orphaned State",
+      "description": "Deletes this plugin's own queue, known-relations and probe-cache rows for movies, series and relations Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
+      "button_label": "Prune",
+      "button_variant": "outline",
+      "button_color": "orange"
     },
     {
       "id": "reset_plugin_state",

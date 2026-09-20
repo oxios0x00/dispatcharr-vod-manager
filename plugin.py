@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.0.7"
+    version = "1.0.8"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -524,6 +524,14 @@ class Plugin:
             },
         },
         {
+            "id": "prune_orphaned_state",
+            "label": "[MAINTENANCE] Prune Orphaned State",
+            "description": "Deletes this plugin's own queue, known-relations and probe-cache rows for movies, series and relations Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
+            "button_label": "Prune",
+            "button_variant": "outline",
+            "button_color": "orange",
+        },
+        {
             "id": "reset_plugin_state",
             "label": "[MAINTENANCE] Reset Plugin State",
             "description": "Wipes the probe cache, queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
@@ -625,6 +633,8 @@ class Plugin:
             return self._delete_strm_files(settings)
         if action_id == "reset_plugin_state":
             return self._reset_plugin_state(settings)
+        if action_id == "prune_orphaned_state":
+            return self._prune_orphaned_state(settings)
         if action_id == "reprobe_by_stream_id":
             return self._reprobe_by_stream_id(settings)
         if action_id == "pause_series_queue":
@@ -1672,6 +1682,70 @@ class Plugin:
         if not cleared:
             return {"status": "ok", "message": "Nothing to delete — no .strm folders found at the configured path."}
         return {"status": "ok", "message": f"Cleared: {', '.join(cleared)}."}
+
+    def _prune_orphaned_state(self, settings):
+        """Deletes the plugin's own rows that point at things Dispatcharr no
+        longer has. Dispatcharr's cleanup removes relations, and the movies
+        and series left with none, when a provider group is disabled or a
+        catalogue is re-imported — but nothing removes the queue, known-
+        relations and probe-cache rows keyed on the deleted ids, so they pile
+        up. A content type Dispatcharr holds none of is skipped: an empty
+        table is more likely a re-import in progress than a real wipe, and
+        every stored row would look orphaned."""
+        from apps.vod.models import Movie, M3UMovieRelation, M3UEpisodeRelation, Series
+
+        in_progress = sum(
+            self.store.queue_counts(t)["in_progress"] for t in (CONTENT_TYPE_MOVIE, CONTENT_TYPE_SERIES)
+        )
+        if in_progress:
+            return {
+                "status": "error",
+                "message": f"{in_progress} title(s) are in progress — wait for the batch to finish first.",
+            }
+
+        dry_run = bool(settings.get("dry_run", True))
+        title_sets = (
+            ("movies", CONTENT_TYPE_MOVIE, Movie),
+            ("series", CONTENT_TYPE_SERIES, Series),
+        )
+        probe_sets = (
+            ("movie probes", CONTENT_TYPE_MOVIE, M3UMovieRelation),
+            ("episode probes", CONTENT_TYPE_EPISODE, M3UEpisodeRelation),
+        )
+        parts, skipped = [], []
+
+        for label, content_type, model in title_sets:
+            live = set(model.objects.values_list("id", flat=True))
+            stored = self.store.stored_content_ids(content_type)
+            if stored and not live:
+                skipped.append(label)
+                continue
+            dead = stored - live
+            if dead and not dry_run:
+                queue, known = self.store.delete_content_rows(content_type, dead)
+                parts.append(f"{len(dead)} {label} ({queue} queue + {known} known-relations rows)")
+            elif dead:
+                parts.append(f"{len(dead)} {label}")
+
+        for label, content_type, model in probe_sets:
+            live = set(model.objects.values_list("id", flat=True))
+            stored = self.store.stored_probe_ids(content_type)
+            if stored and not live:
+                skipped.append(label)
+                continue
+            dead = stored - live
+            if dead and not dry_run:
+                self.store.delete_probe_rows(content_type, dead)
+            if dead:
+                parts.append(f"{len(dead)} {label}")
+
+        verb = "Would remove" if dry_run else "Removed"
+        msg = f"{verb} " + ", ".join(parts) + "." if parts else "Nothing to prune — no orphaned rows."
+        if skipped:
+            msg += f" Skipped (Dispatcharr currently has none): {', '.join(skipped)}."
+        if dry_run and parts:
+            msg += " Turn Dry Run off to delete them."
+        return {"status": "ok", "message": msg}
 
     def _reset_plugin_state(self, settings):
         """Wipes this plugin's own sidecar state (probe cache, queues, known

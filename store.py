@@ -575,6 +575,61 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM run_locks WHERE name = ?", (name,))
 
+    # --- orphan cleanup (rows for titles/relations Dispatcharr deleted) ----
+
+    @staticmethod
+    def _chunks(ids, size=900):
+        # SQLite caps bound variables per statement; same limit get_quality_labels works around.
+        ids = list(ids)
+        for i in range(0, len(ids), size):
+            yield ids[i:i + size]
+
+    def stored_content_ids(self, content_type):
+        """Every movie/series id the queue or the known-relations table still
+        holds for this content_type."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT content_id FROM probe_queue WHERE content_type = ? "
+                "UNION SELECT content_id FROM known_relations WHERE content_type = ?",
+                (content_type, content_type),
+            ).fetchall()
+            return {r["content_id"] for r in rows}
+
+    def delete_content_rows(self, content_type, content_ids):
+        """Drops the queue and known-relations rows of the given titles.
+        Returns (queue rows deleted, known-relations rows deleted)."""
+        queue = known = 0
+        with self._connect() as conn:
+            for chunk in self._chunks(content_ids):
+                marks = ",".join("?" for _ in chunk)
+                queue += conn.execute(
+                    f"DELETE FROM probe_queue WHERE content_type = ? AND content_id IN ({marks})",
+                    (content_type, *chunk),
+                ).rowcount
+                known += conn.execute(
+                    f"DELETE FROM known_relations WHERE content_type = ? AND content_id IN ({marks})",
+                    (content_type, *chunk),
+                ).rowcount
+        return queue, known
+
+    def stored_probe_ids(self, content_type):
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT relation_id FROM relation_probes WHERE content_type = ?", (content_type,)
+            ).fetchall()
+            return {r["relation_id"] for r in rows}
+
+    def delete_probe_rows(self, content_type, relation_ids):
+        deleted = 0
+        with self._connect() as conn:
+            for chunk in self._chunks(relation_ids):
+                marks = ",".join("?" for _ in chunk)
+                deleted += conn.execute(
+                    f"DELETE FROM relation_probes WHERE content_type = ? AND relation_id IN ({marks})",
+                    (content_type, *chunk),
+                ).rowcount
+        return deleted
+
     # --- full reset ------------------------------------------------------
 
     _ALL_TABLES = (
