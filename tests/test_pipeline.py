@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -58,9 +59,9 @@ def test_pipeline_processes_batches_until_the_queue_is_empty():
         batches = [
             {"status": "ok", "message": "b1", "processed": 30, "errors": 2, "pruned": 5},
             {"status": "ok", "message": "b2", "processed": 10, "errors": 0, "pruned": 1},
-            {"status": "ok", "message": "Nothing queued. Run Scan Movies first."},
+            {"status": "ok", "message": "Nothing queued. Run Scan Movies first.", "queue_empty": True},
         ]
-        calls, result = run_pipeline(plugin, lambda _s: batches.pop(0))
+        calls, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
         assert batches == []
         assert calls == ["scan"]
         assert "Processed 40 movies (2 errors), pruned 6." in result["message"]
@@ -77,7 +78,7 @@ def test_pipeline_reports_why_it_stopped_when_paused():
             {"status": "ok", "message": "b1", "processed": 5, "errors": 5, "pruned": 0},
             {"status": "ok", "message": "Queue is paused — resume it to process."},
         ]
-        _, result = run_pipeline(plugin, lambda _s: batches.pop(0))
+        _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
         assert "Queue is paused" in result["message"]
 
     with_plugin(run)
@@ -89,7 +90,7 @@ def test_pipeline_recovers_titles_left_in_progress_by_a_restart():
         assert plugin.store.claim_batch("movie", 5) == [1]
         seen = {}
 
-        def process(_s):
+        def process(_s, _progress):
             seen["counts"] = plugin.store.queue_counts("movie")
             return {"status": "ok", "message": "Nothing queued."}
 
@@ -103,7 +104,7 @@ def test_pipeline_recovers_titles_left_in_progress_by_a_restart():
 def test_pipeline_refuses_to_start_while_another_run_is_live():
     def run(plugin):
         plugin.store.try_acquire_lock("scan_and_process_movie")
-        calls, result = run_pipeline(plugin, lambda _s: {"status": "ok", "message": "x"})
+        calls, result = run_pipeline(plugin, lambda _s, _progress: {"status": "ok", "message": "x"})
         assert result["status"] == "error" and "already running" in result["message"]
         assert calls == []
 
@@ -119,10 +120,52 @@ def test_pipeline_generates_only_when_scheduled():
             return message("generated")
 
         settings = {"dry_run": False, "auto_generate_strm": True}
-        idle = lambda _s: {"status": "ok", "message": "Nothing queued."}  # noqa: E731
+        idle = lambda _s, _progress: {"status": "ok", "message": "Nothing queued.", "queue_empty": True}  # noqa: E731
         run_pipeline(plugin, idle, settings, scheduled=False, generate=generate)
         assert generated == []
         run_pipeline(plugin, idle, settings, scheduled=True, generate=generate)
         assert generated == [1]
+
+    with_plugin(run)
+
+
+def test_pipeline_lets_a_batch_renew_the_lock_after_each_title():
+    def run(plugin):
+        lock = "scan_and_process_movie"
+        seen = {}
+
+        def process(_s, progress):
+            first = plugin.store.lock_held_since(lock)
+            time.sleep(0.02)
+            progress()
+            seen["renewed"] = plugin.store.lock_held_since(lock) > first
+            return {"status": "ok", "message": "Nothing queued."}
+
+        run_pipeline(plugin, process)
+        assert seen["renewed"]
+
+    with_plugin(run)
+
+
+def test_pipeline_tells_how_many_titles_are_left_in_error():
+    def run(plugin):
+        plugin.store.enqueue("movie", 1)
+        plugin.store.claim_batch("movie", 1)
+        plugin.store.mark_error("movie", 1, "boom")
+        idle = lambda _s, _progress: {"status": "ok", "message": "Nothing queued.", "queue_empty": True}  # noqa: E731
+        _, result = run_pipeline(plugin, idle)
+        assert "1 movies in error" in result["message"]
+        assert "Retry Errored Titles" in result["message"]
+
+    with_plugin(run)
+
+
+def test_busy_message_says_started_unless_the_lock_is_renewed():
+    def run(plugin):
+        started = plugin._busy_lock_message("Movie .strm generation", time.time() - 30)
+        assert "started 30s ago" in started["message"] and "after 60 minutes." in started["message"]
+        renewed = plugin._busy_lock_message("Scan + Process", time.time() - 30, 900, renewed=True)
+        assert "last activity 30s ago" in renewed["message"]
+        assert "after 15 minutes without activity" in renewed["message"]
 
     with_plugin(run)

@@ -11,6 +11,7 @@ multi-version playback through Dispatcharr's native Xtream API alone.
 Every design decision referenced in comments below was validated against
 a real Dispatcharr instance and the real Dispatcharr source.
 """
+import json
 import os
 import threading
 import time
@@ -73,7 +74,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.1.2"
+    version = "1.1.3"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -645,7 +646,7 @@ class Plugin:
             return self._test_fire_schedule(settings)
         return {"status": "error", "message": f"Unknown action '{action_id}'"}
 
-    def _busy_lock_message(self, human_name, held_since, stale_after=3600):
+    def _busy_lock_message(self, human_name, held_since, stale_after=3600, renewed=False):
         """A re-click or an automatic retry found the same action still
         running — without this, both would run to completion in parallel and
         pin a worker each for the whole batch, which is what made the whole
@@ -654,13 +655,17 @@ class Plugin:
         a run that died clears itself after stale_after seconds."""
         elapsed = int(time.time() - held_since) if held_since else 0
         minutes = max(1, stale_after // 60)
+        # Only a run that renews its lock has a "last activity"; for the others
+        # the lock's time is when the action started.
+        since = "last activity" if renewed else "started"
+        clears = f"{minutes} minutes without activity" if renewed else f"{minutes} minutes"
         return {
             "status": "error",
             "message": (
-                f"{human_name} is already running (last activity {elapsed}s ago) — wait for it to "
+                f"{human_name} is already running ({since} {elapsed}s ago) — wait for it to "
                 "finish, or check Queue Status for progress, before starting another. If "
                 f"Dispatcharr restarted while one was running, this clears itself automatically "
-                f"after {minutes} minutes without activity."
+                f"after {clears}."
             ),
         }
 
@@ -710,7 +715,7 @@ class Plugin:
         )
         if held_since:
             return self._busy_lock_message(
-                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS
+                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS, renewed=True
             )
         _, error = self._enqueue_background(action_id, settings, scheduled)
         if error:
@@ -735,7 +740,7 @@ class Plugin:
         )
         if not acquired:
             return self._busy_lock_message(
-                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS
+                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS, renewed=True
             )
         try:
             parts = []
@@ -750,14 +755,18 @@ class Plugin:
 
             totals = {"processed": 0, "errors": 0, "pruned": 0}
             stop_message = ""
+            queue_empty = False
             while True:
                 self.store.renew_lock(lock)
                 # Hand this thread's connection back between batches, as the
                 # batch threads do, so a long run never pins one.
                 _release_db_connections()
-                result = process(settings)
+                # A batch can outlast the lock's staleness window, so every
+                # finished title renews it too.
+                result = process(settings, lambda: self.store.renew_lock(lock))
                 if not result.get("processed"):
                     stop_message = result.get("message", "")
+                    queue_empty = bool(result.get("queue_empty"))
                     break
                 for key in totals:
                     totals[key] += result[key]
@@ -767,8 +776,14 @@ class Plugin:
                 f"Processed {totals['processed']} {unit} ({totals['errors']} errors), "
                 f"{'would prune' if dry_run else 'pruned'} {totals['pruned']}."
             )
-            if stop_message and not stop_message.startswith("Nothing queued"):
+            if stop_message and not queue_empty:
                 parts.append(stop_message)
+            errored = self.store.queue_counts(content_type)["error"]
+            if errored:
+                parts.append(
+                    f"{errored} {unit} in error, left alone until their relations change — "
+                    "[MAINTENANCE] Retry Errored Titles puts them back in the queue."
+                )
             if scheduled and settings.get("auto_generate_strm"):
                 parts.append(generate(settings).get("message", ""))
             self._catalog_stats(settings)
@@ -912,14 +927,21 @@ class Plugin:
         every Scan, was queued again at the head of the next batch, failed
         again and tripped the circuit breaker over and over. Scan now
         requeues it only if its relations change."""
-        current = set(
-            relation_model.objects.filter(
-                m3u_account__is_active=True, **{id_field: content_id}
-            ).values_list("id", flat=True)
-        )
-        self.store.set_known_relation_ids(content_type, content_id, current)
+        try:
+            current = set(
+                relation_model.objects.filter(
+                    m3u_account__is_active=True, **{id_field: content_id}
+                ).values_list("id", flat=True)
+            )
+            self.store.set_known_relation_ids(content_type, content_id, current)
+        except Exception as exc:  # noqa: BLE001 - the title is already marked as failed
+            import logging
 
-    def _process_batch(self, settings):
+            logging.getLogger("vod_manager.pipeline").warning(
+                "Could not record the relations of failed %s %s: %s", content_type, content_id, exc
+            )
+
+    def _process_batch(self, settings, on_progress=None):
         from apps.vod.models import M3UMovieRelation
 
         acquired, held_since = self.store.try_acquire_lock("process_movie_batch")
@@ -940,7 +962,7 @@ class Plugin:
 
             movie_ids = self.store.claim_batch(CONTENT_TYPE_MOVIE, batch_size)
             if not movie_ids:
-                return {"status": "ok", "message": "Nothing queued. Run Scan Movies first."}
+                return {"status": "ok", "message": "Nothing queued. Run Scan Movies first.", "queue_empty": True}
 
             run_id = self.store.start_run(CONTENT_TYPE_MOVIE, dry_run)
             limiter = _RateLimiter(max_per_second)
@@ -973,6 +995,8 @@ class Plugin:
                             CONTENT_TYPE_MOVIE, movie_id, M3UMovieRelation, "movie_id"
                         )
                     processed += 1
+                    if on_progress:
+                        on_progress()
 
                     if processed >= 5 and not breaker_tripped:
                         if errors / processed > breaker_ratio:
@@ -1238,7 +1262,7 @@ class Plugin:
 
     # --- series: process batch --------------------------------------------
 
-    def _process_series_batch(self, settings):
+    def _process_series_batch(self, settings, on_progress=None):
         from apps.vod.models import M3USeriesRelation
 
         acquired, held_since = self.store.try_acquire_lock("process_series_batch")
@@ -1261,7 +1285,7 @@ class Plugin:
 
             series_ids = self.store.claim_batch(CONTENT_TYPE_SERIES, batch_size)
             if not series_ids:
-                return {"status": "ok", "message": "Nothing queued. Run Scan Series first."}
+                return {"status": "ok", "message": "Nothing queued. Run Scan Series first.", "queue_empty": True}
 
             run_id = self.store.start_run(CONTENT_TYPE_SERIES, dry_run)
             limiter = _RateLimiter(max_per_second)
@@ -1294,6 +1318,8 @@ class Plugin:
                             CONTENT_TYPE_SERIES, series_id, M3USeriesRelation, "series_id"
                         )
                     processed += 1
+                    if on_progress:
+                        on_progress()
 
                     if processed >= 5 and not breaker_tripped:
                         if errors / processed > breaker_ratio:
@@ -2087,11 +2113,20 @@ class Plugin:
 
         crontab = str(task.crontab) if task.crontab else "?"
         last_run = task.last_run_at.isoformat() if task.last_run_at else "never"
+        try:
+            action = json.loads(task.kwargs or "{}").get("action")
+        except ValueError:
+            action = None
+        invalid = (
+            f" | INVALID target '{action}' — click Apply with a valid Scheduled action"
+            if action not in self._VALID_SCHEDULE_TARGETS
+            else ""
+        )
         return {
             "status": "ok",
             "message": (
                 f"Schedule: {crontab} | enabled={task.enabled} | "
-                f"last run: {last_run} | total runs: {task.total_run_count}"
+                f"last run: {last_run} | total runs: {task.total_run_count}{invalid}"
             ),
         }
 
@@ -2126,6 +2161,8 @@ try:
             action, {},
             {"logger": logger, "settings": settings or {}, "scheduled": scheduled, "background": True},
         )
+        if result.get("status") == "error":
+            logger.error("Scheduled action '%s' failed: %s", action, result.get("message"))
         if not scheduled:
             return result
         try:
