@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.1.1"
+    version = "1.1.2"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -514,6 +514,14 @@ class Plugin:
             "button_color": "orange",
         },
         {
+            "id": "retry_errored_titles",
+            "label": "[MAINTENANCE] Retry Errored Titles",
+            "description": "Puts every title whose last attempt failed (Queue Status 'error') back in the queue, for both movies and series. A title that keeps failing is otherwise left alone until its relations change, so use this after a provider outage or once you have fixed the cause. Then run Scan + Process.",
+            "button_label": "Retry",
+            "button_variant": "outline",
+            "button_color": "orange",
+        },
+        {
             "id": "reset_plugin_state",
             "label": "[MAINTENANCE] Reset Plugin State",
             "description": "Wipes the probe cache, queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
@@ -615,6 +623,8 @@ class Plugin:
             return self._reset_plugin_state(settings)
         if action_id == "prune_orphaned_state":
             return self._prune_orphaned_state(settings)
+        if action_id == "retry_errored_titles":
+            return self._retry_errored_titles()
         if action_id == "reprobe_by_stream_id":
             return self._reprobe_by_stream_id(settings)
         if action_id == "pause_series_queue":
@@ -896,7 +906,22 @@ class Plugin:
 
     # --- process batch ------------------------------------------------------
 
+    def _remember_failed_relations(self, content_type, content_id, relation_model, id_field):
+        """Record the relation ids a title failed with. They are otherwise
+        only recorded on success, so a title that always fails looked new on
+        every Scan, was queued again at the head of the next batch, failed
+        again and tripped the circuit breaker over and over. Scan now
+        requeues it only if its relations change."""
+        current = set(
+            relation_model.objects.filter(
+                m3u_account__is_active=True, **{id_field: content_id}
+            ).values_list("id", flat=True)
+        )
+        self.store.set_known_relation_ids(content_type, content_id, current)
+
     def _process_batch(self, settings):
+        from apps.vod.models import M3UMovieRelation
+
         acquired, held_since = self.store.try_acquire_lock("process_movie_batch")
         if not acquired:
             return self._busy_lock_message("A movie batch", held_since)
@@ -934,6 +959,9 @@ class Plugin:
                 }
                 for future in as_completed(futures):
                     movie_id = futures[future]
+                    if future.cancelled():
+                        self.store.release_claimed(CONTENT_TYPE_MOVIE, [movie_id])
+                        continue
                     try:
                         pruned = future.result()
                         pruned_total += pruned
@@ -941,12 +969,20 @@ class Plugin:
                     except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
                         errors += 1
                         self.store.mark_error(CONTENT_TYPE_MOVIE, movie_id, exc)
+                        self._remember_failed_relations(
+                            CONTENT_TYPE_MOVIE, movie_id, M3UMovieRelation, "movie_id"
+                        )
                     processed += 1
 
                     if processed >= 5 and not breaker_tripped:
                         if errors / processed > breaker_ratio:
                             self.store.set_paused(CONTENT_TYPE_MOVIE, True)
                             breaker_tripped = True
+                            # Titles no thread has started yet go back to the
+                            # queue rather than being worked through a failing
+                            # provider; only the ones in flight finish.
+                            for pending in futures:
+                                pending.cancel()
 
             note = "circuit breaker tripped" if breaker_tripped else ""
             self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
@@ -1203,6 +1239,8 @@ class Plugin:
     # --- series: process batch --------------------------------------------
 
     def _process_series_batch(self, settings):
+        from apps.vod.models import M3USeriesRelation
+
         acquired, held_since = self.store.try_acquire_lock("process_series_batch")
         if not acquired:
             return self._busy_lock_message("A series batch", held_since)
@@ -1242,6 +1280,9 @@ class Plugin:
                 }
                 for future in as_completed(futures):
                     series_id = futures[future]
+                    if future.cancelled():
+                        self.store.release_claimed(CONTENT_TYPE_SERIES, [series_id])
+                        continue
                     try:
                         pruned = future.result()
                         pruned_total += pruned
@@ -1249,12 +1290,20 @@ class Plugin:
                     except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
                         errors += 1
                         self.store.mark_error(CONTENT_TYPE_SERIES, series_id, exc)
+                        self._remember_failed_relations(
+                            CONTENT_TYPE_SERIES, series_id, M3USeriesRelation, "series_id"
+                        )
                     processed += 1
 
                     if processed >= 5 and not breaker_tripped:
                         if errors / processed > breaker_ratio:
                             self.store.set_paused(CONTENT_TYPE_SERIES, True)
                             breaker_tripped = True
+                            # Titles no thread has started yet go back to the
+                            # queue rather than being worked through a failing
+                            # provider; only the ones in flight finish.
+                            for pending in futures:
+                                pending.cancel()
 
             note = "circuit breaker tripped" if breaker_tripped else ""
             self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
@@ -1843,6 +1892,17 @@ class Plugin:
         if dry_run and parts:
             msg += " Turn Dry Run off to delete them."
         return {"status": "ok", "message": msg}
+
+    def _retry_errored_titles(self):
+        movies = self.store.requeue_errors(CONTENT_TYPE_MOVIE)
+        series = self.store.requeue_errors(CONTENT_TYPE_SERIES)
+        return {
+            "status": "ok",
+            "message": (
+                f"Re-queued {movies} movie(s) and {series} series that had failed"
+                f"{' — run Scan + Process to retry them.' if movies or series else '.'}"
+            ),
+        }
 
     def _reset_plugin_state(self, settings):
         """Wipes this plugin's own sidecar state (probe cache, queues, known

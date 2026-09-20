@@ -97,6 +97,38 @@ def test_changed_content_ids_flags_new_and_different_relation_sets():
     with_store(run)
 
 
+def test_release_claimed_puts_unstarted_titles_back_in_the_queue():
+    def run(s):
+        for cid in (1, 2, 3):
+            s.enqueue("movie", cid)
+        assert sorted(s.claim_batch("movie", 3)) == [1, 2, 3]
+        s.mark_done("movie", 1)
+        s.release_claimed("movie", [1, 2])
+        counts = s.queue_counts("movie")
+        # 1 stays done (only in-progress rows are released), 3 was not released.
+        assert counts["done"] == 1 and counts["pending"] == 1 and counts["in_progress"] == 1
+
+    with_store(run)
+
+
+def test_requeue_errors_only_touches_errored_titles_of_that_type():
+    def run(s):
+        for cid in (1, 2, 3):
+            s.enqueue("movie", cid)
+        s.enqueue("series", 9)
+        s.claim_batch("movie", 3)
+        s.claim_batch("series", 1)
+        s.mark_error("movie", 1, "boom")
+        s.mark_done("movie", 2)
+        s.mark_error("series", 9, "boom")
+        assert s.requeue_errors("movie") == 1
+        counts = s.queue_counts("movie")
+        assert counts["pending"] == 1 and counts["done"] == 1 and counts["in_progress"] == 1
+        assert s.queue_counts("series")["error"] == 1
+
+    with_store(run)
+
+
 def test_migrated_old_rows_default_probe_version_to_zero():
     # An old row saved before probe_version existed must read back as 0
     # (older than any real PROBE_SCHEMA_VERSION), so the "stale cache,

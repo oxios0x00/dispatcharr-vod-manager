@@ -311,6 +311,27 @@ class Store:
                 (time.time(), content_type, content_id),
             )
 
+    def requeue_errors(self, content_type):
+        """Put every errored title back in the queue. Returns how many."""
+        with self._connect() as conn:
+            return conn.execute(
+                "UPDATE probe_queue SET status = 'pending', attempts = 0, last_error = NULL, "
+                "updated_at = ? WHERE content_type = ? AND status = 'error'",
+                (time.time(), content_type),
+            ).rowcount
+
+    def release_claimed(self, content_type, content_ids):
+        """Put titles a batch claimed but never started back in the queue."""
+        with self._connect() as conn:
+            for chunk in self._chunks(content_ids):
+                placeholders = ",".join("?" for _ in chunk)
+                conn.execute(
+                    f"UPDATE probe_queue SET status = 'pending', updated_at = ? "
+                    f"WHERE content_type = ? AND status = 'in_progress' "
+                    f"AND content_id IN ({placeholders})",
+                    (time.time(), content_type, *chunk),
+                )
+
     def mark_error(self, content_type, content_id, error):
         with self._connect() as conn:
             conn.execute(

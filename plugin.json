@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -419,6 +419,14 @@
       "label": "[MAINTENANCE] Prune Orphaned State",
       "description": "Deletes this plugin's own queue, known-relations and probe-cache rows for movies, series and relations Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
       "button_label": "Prune",
+      "button_variant": "outline",
+      "button_color": "orange"
+    },
+    {
+      "id": "retry_errored_titles",
+      "label": "[MAINTENANCE] Retry Errored Titles",
+      "description": "Puts every title whose last attempt failed (Queue Status 'error') back in the queue, for both movies and series. A title that keeps failing is otherwise left alone until its relations change, so use this after a provider outage or once you have fixed the cause. Then run Scan + Process.",
+      "button_label": "Retry",
       "button_variant": "outline",
       "button_color": "orange"
     },
