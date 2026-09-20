@@ -74,7 +74,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.2.1"
+    version = "1.3.0"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -418,7 +418,7 @@ class Plugin:
         {
             "id": "generate_movie_strm",
             "label": "[MOVIES] Generate .strm Files",
-            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
+            "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -482,7 +482,7 @@ class Plugin:
         {
             "id": "generate_series_strm",
             "label": "[SERIES] Generate .strm Files",
-            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
+            "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
             "button_label": "Generate",
             "button_variant": "outline",
             "button_color": "cyan",
@@ -600,6 +600,10 @@ class Plugin:
         scheduled = bool(context.get("scheduled"))
         if action_id in self._BACKGROUND_ACTIONS and not context.get("background"):
             return self._start_background(action_id, settings, scheduled)
+        if action_id in self._GENERATE_ACTIONS:
+            if not context.get("background"):
+                return self._start_generate(action_id, settings)
+            return self._run_generate_in_background(action_id, settings)
         if action_id == "clean_movie_titles":
             return self._clean_movie_titles(settings)
         if action_id == "clean_series_titles":
@@ -624,10 +628,6 @@ class Plugin:
             return self._queue_status(CONTENT_TYPE_SERIES)
         if action_id == "catalog_stats":
             return self._catalog_stats(settings)
-        if action_id == "generate_movie_strm":
-            return self._generate_movie_strm(settings)
-        if action_id == "generate_series_strm":
-            return self._generate_series_strm(settings)
         if action_id == "delete_strm_files":
             return self._delete_strm_files(settings)
         if action_id == "reset_plugin_state":
@@ -717,6 +717,71 @@ class Plugin:
         except Exception as e:
             return None, {"status": "error", "message": f"Failed to queue the background run: {e}"}
         return async_result.id, None
+
+    _GENERATE_ACTIONS = {
+        "generate_movie_strm": (CONTENT_TYPE_MOVIE, "Movie .strm generation", "movie .strm files"),
+        "generate_series_strm": (CONTENT_TYPE_SERIES, "Series .strm generation", "series .strm files"),
+    }
+
+    def _generate_blocker(self, content_type, settings):
+        """Why a .strm generation cannot start now, or None. Checked when the
+        button is clicked, so the refusal shows at once instead of in a
+        background task nobody is watching."""
+        if not (settings.get("strm_dispatcharr_url") or "").strip() or not (
+            settings.get("strm_library_path") or ""
+        ).strip():
+            return {
+                "status": "error",
+                "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
+            }
+        queue = self.store.queue_counts(content_type)
+        if queue["pending"] or queue["in_progress"]:
+            queue_name = "Queue Status" if content_type == CONTENT_TYPE_MOVIE else "Series Queue Status"
+            return {
+                "status": "error",
+                "message": (
+                    f"{queue['pending']} {'movie(s)' if content_type == CONTENT_TYPE_MOVIE else 'series'} pending, "
+                    f"{queue['in_progress']} in progress — "
+                    f"finish Scan + Process first ({queue_name} should read 0 pending and 0 in "
+                    "progress). Generating now would give still-unprobed titles a '- unprobed' "
+                    "filename and write a file for a relation that's about to be pruned, only for "
+                    "it to disappear on the next Generate run."
+                ),
+            }
+        return None
+
+    def _start_generate(self, action_id, settings):
+        content_type, human_name, _ = self._GENERATE_ACTIONS[action_id]
+        blocker = self._generate_blocker(content_type, settings)
+        if blocker:
+            return blocker
+        held_since = self.store.lock_held_since(action_id)
+        if held_since:
+            return self._busy_lock_message(human_name, held_since)
+        _, error = self._enqueue_background(action_id, settings, scheduled=False)
+        if error:
+            return error
+        return {
+            "status": "ok",
+            "message": (
+                f"{human_name} started in the background; a notification appears when it is done."
+            ),
+        }
+
+    def _run_generate_in_background(self, action_id, settings):
+        """Run a generation inside the Celery task and post its outcome."""
+        import logging
+
+        logger = logging.getLogger("vod_manager.generate")
+        run = self._generate_movie_strm if action_id == "generate_movie_strm" else self._generate_series_strm
+        result = run(settings)
+        _, _, label = self._GENERATE_ACTIONS[action_id]
+        logger.info("%s finished: %s", label, result.get("message"))
+        self._notify_run_finished(
+            label.replace(" ", "-"), result.get("message", ""), stopped=result.get("status") == "error",
+            logger=logger, title=f"VOD Manager: {label} " + ("failed" if result.get("status") == "error" else "generated"),
+        )
+        return result
 
     def _start_background(self, action_id, settings, scheduled):
         content_type = self._BACKGROUND_ACTIONS[action_id]
@@ -808,7 +873,7 @@ class Plugin:
 
     _NOTIFICATION_KEY_PREFIX = "vod-manager-run-"
 
-    def _notify_run_finished(self, unit, message, stopped, logger):
+    def _notify_run_finished(self, unit, message, stopped, logger, title=None):
         """Show the outcome in Dispatcharr's notification centre (a toast for
         whoever is connected, then an entry in the bell). Only the latest per
         content type is kept: a dismissed notification stays dismissed per user, so reusing
@@ -825,7 +890,7 @@ class Plugin:
                 notification_key=f"{self._NOTIFICATION_KEY_PREFIX}{unit}-{int(time.time())}",
                 notification_type=kind.WARNING if stopped else kind.INFO,
                 priority=SystemNotification.Priority.HIGH,
-                title=f"VOD Manager: {unit} {'stopped' if stopped else 'done'}",
+                title=title or f"VOD Manager: {unit} {'stopped' if stopped else 'done'}",
                 message=message,
                 is_active=True,
                 admin_only=True,
@@ -1639,25 +1704,11 @@ class Plugin:
             from apps.vod.models import M3UMovieRelation
             from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
+            blocker = self._generate_blocker(CONTENT_TYPE_MOVIE, settings)
+            if blocker:
+                return blocker
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
-            if not base_url or not library_root:
-                return {
-                    "status": "error",
-                    "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
-                }
-            queue = self.store.queue_counts(CONTENT_TYPE_MOVIE)
-            if queue["pending"] or queue["in_progress"]:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"{queue['pending']} movie(s) pending, {queue['in_progress']} in progress — "
-                        "finish Scan + Process first (Queue Status should read 0 pending and 0 in "
-                        "progress). Generating now would give still-unprobed titles a '- unprobed' "
-                        "filename and write a file for a relation that's about to be pruned, only for "
-                        "it to disappear on the next Generate run."
-                    ),
-                }
             subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
             library_dir = os.path.join(library_root, subfolder)
             include_id_tag = bool(settings.get("strm_include_id_tag"))
@@ -1739,25 +1790,11 @@ class Plugin:
 
             from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
+            blocker = self._generate_blocker(CONTENT_TYPE_SERIES, settings)
+            if blocker:
+                return blocker
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
-            if not base_url or not library_root:
-                return {
-                    "status": "error",
-                    "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
-                }
-            queue = self.store.queue_counts(CONTENT_TYPE_SERIES)
-            if queue["pending"] or queue["in_progress"]:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"{queue['pending']} series pending, {queue['in_progress']} in progress — "
-                        "finish Scan + Process first (Series Queue Status should read 0 pending "
-                        "and 0 in progress). Generating now would give still-unprobed titles a "
-                        "'- unprobed' filename and write a file for a relation that's about to be "
-                        "pruned, only for it to disappear on the next Generate run."
-                    ),
-                }
             subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
             library_dir = os.path.join(library_root, subfolder)
             include_id_tag = bool(settings.get("strm_include_id_tag"))

@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -323,7 +323,7 @@
     {
       "id": "generate_movie_strm",
       "label": "[MOVIES] Generate .strm Files",
-      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
+      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -387,7 +387,7 @@
     {
       "id": "generate_series_strm",
       "label": "[SERIES] Generate .strm Files",
-      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first.",
+      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"

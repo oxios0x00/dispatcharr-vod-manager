@@ -169,3 +169,48 @@ def test_busy_message_says_started_unless_the_lock_is_renewed():
         assert "after 15 minutes without activity" in renewed["message"]
 
     with_plugin(run)
+
+
+FULL_STRM_SETTINGS = {"strm_dispatcharr_url": "http://x:9191", "strm_library_path": "/data/strm"}
+
+
+def test_generate_is_refused_at_click_time_without_its_settings():
+    def run(plugin):
+        result = plugin.run("generate_movie_strm", {}, {"settings": {}})
+        assert result["status"] == "error" and "Set both" in result["message"]
+
+    with_plugin(run)
+
+
+def test_generate_is_refused_at_click_time_while_the_queue_is_not_drained():
+    def run(plugin):
+        plugin.store.enqueue("series", 1)
+        result = plugin.run("generate_series_strm", {}, {"settings": FULL_STRM_SETTINGS})
+        assert result["status"] == "error"
+        assert "1 series pending" in result["message"] and "Series Queue Status" in result["message"]
+
+    with_plugin(run)
+
+
+def test_generate_click_is_refused_while_a_generation_is_running():
+    def run(plugin):
+        plugin.store.try_acquire_lock("generate_movie_strm")
+        result = plugin.run("generate_movie_strm", {}, {"settings": FULL_STRM_SETTINGS})
+        assert result["status"] == "error" and "already running" in result["message"]
+
+    with_plugin(run)
+
+
+def test_generate_in_the_background_runs_it_and_reports_the_outcome():
+    def run(plugin):
+        notified = {}
+        plugin._generate_movie_strm = lambda _s: {"status": "ok", "message": "Created 3 files."}
+        plugin._notify_run_finished = lambda unit, message, stopped, logger, title=None: notified.update(
+            unit=unit, message=message, stopped=stopped, title=title
+        )
+        result = plugin.run("generate_movie_strm", {}, {"settings": FULL_STRM_SETTINGS, "background": True})
+        assert result["message"] == "Created 3 files."
+        assert notified["message"] == "Created 3 files." and not notified["stopped"]
+        assert "generated" in notified["title"]
+
+    with_plugin(run)
