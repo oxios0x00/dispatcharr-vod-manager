@@ -73,7 +73,7 @@ class _RateLimiter:
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.1.0"
+    version = "1.1.1"
     description = (
         "Probes movie/series stream quality and language with ffprobe, keeps one "
         "winner per configured tier, and prunes the rest — with optional .strm "
@@ -764,9 +764,40 @@ class Plugin:
             self._catalog_stats(settings)
             message = " | ".join(part for part in parts if part)
             logger.info("Scan + Process (%s) finished: %s", content_type, message)
+            self._notify_run_finished(
+                unit, message, stopped=self.store.is_paused(content_type), logger=logger
+            )
             return {"status": "ok", "message": message}
         finally:
             self.store.release_lock(lock)
+
+    _NOTIFICATION_KEY_PREFIX = "vod-manager-run-"
+
+    def _notify_run_finished(self, unit, message, stopped, logger):
+        """Show the outcome in Dispatcharr's notification centre (a toast for
+        whoever is connected, then an entry in the bell). Only the latest per
+        content type is kept: a dismissed notification stays dismissed per user, so reusing
+        one key would hide every later run from anyone who had closed it."""
+        try:
+            from core.models import SystemNotification
+            from core.utils import send_websocket_notification
+
+            SystemNotification.objects.filter(
+                notification_key__startswith=f"{self._NOTIFICATION_KEY_PREFIX}{unit}-"
+            ).delete()
+            kind = SystemNotification.NotificationType
+            notification = SystemNotification.objects.create(
+                notification_key=f"{self._NOTIFICATION_KEY_PREFIX}{unit}-{int(time.time())}",
+                notification_type=kind.WARNING if stopped else kind.INFO,
+                priority=SystemNotification.Priority.HIGH,
+                title=f"VOD Manager: {unit} {'stopped' if stopped else 'done'}",
+                message=message,
+                is_active=True,
+                admin_only=True,
+            )
+            send_websocket_notification(notification)
+        except Exception as exc:  # noqa: BLE001 - a notification must never fail the run
+            logger.warning("Could not send the completion notification: %s", exc)
 
     def _scan_and_process(self, settings, scheduled=False):
         return self._run_pipeline(
