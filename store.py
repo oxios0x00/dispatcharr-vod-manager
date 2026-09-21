@@ -110,7 +110,7 @@ class Store:
         finally:
             conn.close()
 
-    # --- plugin_state (small key/value: paused flag, etc.) -----------------
+    # --- plugin_state (small key/value: stop request, etc.) -----------------
 
     def get_state(self, key, default=None):
         with self._connect() as conn:
@@ -132,14 +132,16 @@ class Store:
                 (key, json.dumps(value)),
             )
 
-    def is_paused(self, content_type):
-        # Keyed per content_type so a movie circuit-breaker trip (or a
-        # manual pause) doesn't silently pause series processing too, and
-        # vice versa — the two queues are otherwise fully independent.
-        return bool(self.get_state(f"paused:{content_type}", False))
+    def request_stop(self, content_type):
+        self.set_state(f"stop:{content_type}", True)
 
-    def set_paused(self, content_type, paused):
-        self.set_state(f"paused:{content_type}", bool(paused))
+    def stop_requested(self, content_type):
+        # Keyed per content_type so stopping a movie run does not stop a
+        # series run.
+        return bool(self.get_state(f"stop:{content_type}", False))
+
+    def clear_stop(self, content_type):
+        self.set_state(f"stop:{content_type}", False)
 
     # --- probe_queue ---------------------------------------------------
 
@@ -482,7 +484,7 @@ class Store:
 
     def reset_all(self):
         """Wipes every table this plugin owns: queues, known
-        relation sets, pause flags, run history, catalog stat snapshots and
+        relation sets, stop requests, run history, catalog stat snapshots and
         .strm tracking. The next scan re-discovers everything as new and the
         next process decides every title again. Never touches Dispatcharr's own
         database — only this plugin's own sidecar state."""

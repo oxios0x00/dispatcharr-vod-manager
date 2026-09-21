@@ -131,26 +131,6 @@ def test_catalog_stats_snapshot_roundtrip():
     with_store(run)
 
 
-def test_pause_flag_persists():
-    def run(s):
-        assert s.is_paused("movie") is False
-        s.set_paused("movie", True)
-        assert s.is_paused("movie") is True
-
-    with_store(run)
-
-
-def test_pause_flag_is_independent_per_content_type():
-    # A movie circuit-breaker trip (or a manual pause) must not also pause
-    # series processing, and vice versa.
-    def run(s):
-        s.set_paused("movie", True)
-        assert s.is_paused("movie") is True
-        assert s.is_paused("series") is False
-
-    with_store(run)
-
-
 def test_strm_manifest_starts_empty():
     def run(s):
         assert s.get_strm_manifest("movie") == set()
@@ -191,7 +171,7 @@ def test_reset_all_clears_every_table():
     def run(s):
         s.enqueue("movie", 1)
         s.set_known_relation_ids("movie", 1, {10, 11})
-        s.set_paused("movie", True)
+        s.request_stop("movie")
         s.start_run("movie", dry_run=True)
         s.save_catalog_stats_snapshot([
             {"content_type": "movie", "quality_label": "1080p", "title_count": 1, "relation_count": 1},
@@ -202,7 +182,7 @@ def test_reset_all_clears_every_table():
 
         assert s.queue_counts("movie") == {"pending": 0, "in_progress": 0, "waiting": 0, "done": 0, "error": 0}
         assert s.get_known_relation_ids("movie", 1) is None
-        assert s.is_paused("movie") is False
+        assert s.stop_requested("movie") is False
         assert s.get_latest_catalog_stats() == (None, [])
         assert s.get_strm_manifest("movie") == set()
 
@@ -339,5 +319,17 @@ def test_a_waiting_title_leaves_the_queue_until_it_is_requeued():
         assert s.requeue_waiting("movie") == 1
         assert s.queue_counts("movie")["pending"] == 1
         assert s.queue_counts("series")["pending"] == 1
+
+    with_store(run)
+
+
+def test_a_stop_request_is_kept_until_cleared_and_is_per_content_type():
+    def run(s):
+        assert s.stop_requested("movie") is False
+        s.request_stop("movie")
+        assert s.stop_requested("movie") is True
+        assert s.stop_requested("series") is False
+        s.clear_stop("movie")
+        assert s.stop_requested("movie") is False
 
     with_store(run)

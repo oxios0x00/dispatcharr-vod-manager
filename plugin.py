@@ -48,7 +48,7 @@ class _WaitingForMeasurements(Exception):
 
 class Plugin:
     name = "VOD Manager"
-    version = "2.0.0"
+    version = "2.2.0"
     description = (
         "Keeps one winner per configured quality tier from the measurements of the "
         "vod-probe plugin and prunes the rest — with optional .strm generation for "
@@ -267,7 +267,6 @@ class Plugin:
                 {"value": "clean_series_titles", "label": "Clean Series Titles only"},
                 {"value": "scan_and_process_series", "label": "Scan + Process Series (recommended)"},
                 {"value": "scan_series", "label": "Scan Series only"},
-                {"value": "retry_empty_series_fetches", "label": "Retry Empty Series Episode Fetches only"},
                 {"value": "generate_movie_strm", "label": "Generate Movie .strm Files only"},
                 {"value": "generate_series_strm", "label": "Generate Series .strm Files only"},
             ],
@@ -279,7 +278,7 @@ class Plugin:
         {
             "id": "scan_and_process",
             "label": "[MOVIES] Scan + Process",
-            "description": "Starts a background run: scans for changed movies, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A movie whose relations vod-probe has not measured yet waits for the next run. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
+            "description": "Starts a background run: scans for changed movies, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or you stop it. A movie whose relations vod-probe has not measured yet waits for the next run. The click returns at once; follow it with Queue Status, end it with Stop.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -301,20 +300,12 @@ class Plugin:
             "button_color": "blue",
         },
         {
-            "id": "pause_queue",
-            "label": "[MOVIES] Pause Queue",
-            "description": "Stops a running Scan + Process after its current batch, and keeps Scan + Process from processing until resumed.",
-            "button_label": "Pause",
+            "id": "stop_queue",
+            "label": "[MOVIES] Stop",
+            "description": "Stops a running movie Scan + Process after its current batch. Nothing is left blocked: run Scan + Process again to carry on.",
+            "button_label": "Stop",
             "button_variant": "outline",
             "button_color": "orange",
-        },
-        {
-            "id": "resume_queue",
-            "label": "[MOVIES] Resume Queue",
-            "description": "Clear a pause.",
-            "button_label": "Resume",
-            "button_variant": "outline",
-            "button_color": "teal",
         },
         {
             "id": "clean_movie_titles",
@@ -335,7 +326,7 @@ class Plugin:
         {
             "id": "scan_and_process_series",
             "label": "[SERIES] Scan + Process",
-            "description": "Starts a background run: scans for changed series, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A series vod-probe has not finished waits for the next run. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
+            "description": "Starts a background run: scans for changed series, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or you stop it. A series vod-probe has not finished waits for the next run. The click returns at once; follow it with Series Queue Status, end it with Stop.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -357,26 +348,10 @@ class Plugin:
             "button_color": "blue",
         },
         {
-            "id": "pause_series_queue",
-            "label": "[SERIES] Pause Queue",
-            "description": "Stops a running Scan + Process after its current batch, and keeps Scan + Process from processing until resumed. Independent of the Movies pause.",
-            "button_label": "Pause",
-            "button_variant": "outline",
-            "button_color": "orange",
-        },
-        {
-            "id": "resume_series_queue",
-            "label": "[SERIES] Resume Queue",
-            "description": "Clear a pause on the series queue.",
-            "button_label": "Resume",
-            "button_variant": "outline",
-            "button_color": "teal",
-        },
-        {
-            "id": "retry_empty_series_fetches",
-            "label": "[SERIES] Retry Empty Episode Fetches",
-            "description": "Dispatcharr marks a series-relation as 'episodes fetched' after any provider response that doesn't error — even an empty or incomplete one — and never retries it again on its own (Dispatcharr/Dispatcharr#556 is the closest existing report, though that one's about a crash, not a silent empty response). This finds relations stuck exactly that way — zero episodes, or fewer than the provider actually lists (checked with one provider call per suspicious relation, at most 60 per click, click again for the rest) — and re-queues their series for a fresh attempt on the next Scan + Process. Capped at 3 retries per relation so a title that's genuinely short on the provider's side doesn't get retried forever.",
-            "button_label": "Retry Empty Fetches",
+            "id": "stop_series_queue",
+            "label": "[SERIES] Stop",
+            "description": "Stops a running series Scan + Process after its current batch. Nothing is left blocked: run Scan + Process again to carry on.",
+            "button_label": "Stop",
             "button_variant": "outline",
             "button_color": "orange",
         },
@@ -515,12 +490,8 @@ class Plugin:
             return self._scan_and_process(settings, scheduled=scheduled)
         if action_id == "queue_status":
             return self._queue_status(CONTENT_TYPE_MOVIE)
-        if action_id == "pause_queue":
-            self.store.set_paused(CONTENT_TYPE_MOVIE, True)
-            return {"status": "ok", "message": "Queue paused."}
-        if action_id == "resume_queue":
-            self.store.set_paused(CONTENT_TYPE_MOVIE, False)
-            return {"status": "ok", "message": "Queue resumed."}
+        if action_id == "stop_queue":
+            return self._request_stop(CONTENT_TYPE_MOVIE)
         if action_id == "scan_series":
             return self._scan_series(settings)
         if action_id == "scan_and_process_series":
@@ -537,14 +508,8 @@ class Plugin:
             return self._prune_orphaned_state(settings)
         if action_id == "retry_errored_titles":
             return self._retry_errored_titles()
-        if action_id == "pause_series_queue":
-            self.store.set_paused(CONTENT_TYPE_SERIES, True)
-            return {"status": "ok", "message": "Series queue paused."}
-        if action_id == "resume_series_queue":
-            self.store.set_paused(CONTENT_TYPE_SERIES, False)
-            return {"status": "ok", "message": "Series queue resumed."}
-        if action_id == "retry_empty_series_fetches":
-            return self._retry_empty_series_fetches(settings)
+        if action_id == "stop_series_queue":
+            return self._request_stop(CONTENT_TYPE_SERIES)
         if action_id == "apply_schedule":
             return self._apply_schedule(settings)
         if action_id == "remove_schedule":
@@ -554,6 +519,17 @@ class Plugin:
         if action_id == "test_fire_schedule":
             return self._test_fire_schedule(settings)
         return {"status": "error", "message": f"Unknown action '{action_id}'"}
+
+    def _request_stop(self, content_type):
+        if not self.store.lock_held_since(
+            self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
+        ):
+            return {"status": "ok", "message": "Nothing is running."}
+        self.store.request_stop(content_type)
+        return {
+            "status": "ok",
+            "message": "Stop requested: the run ends after its current batch. Run Scan + Process again to carry on.",
+        }
 
     def _busy_lock_message(self, human_name, held_since, stale_after=3600, renewed=False):
         """A re-click or an automatic retry found the same action still
@@ -584,8 +560,8 @@ class Plugin:
     # it: a whole catalogue takes longer than the browser (about a minute
     # here) or nginx (300 s) will wait, so a synchronous click ended
     # in a 504 while the work carried on unseen. The click now only queues the
-    # task; Queue Status shows how far it got and Pause Queue stops it after
-    # the current batch.
+    # task; Queue Status shows how far it got and Stop ends it after the
+    # current batch.
 
     _BACKGROUND_ACTIONS = {
         "scan_and_process": CONTENT_TYPE_MOVIE,
@@ -698,13 +674,13 @@ class Plugin:
             "status": "ok",
             "message": (
                 "Scan + Process started in the background. It runs until the queue is empty. "
-                "Click Queue Status to follow it, Pause Queue to stop it after the current batch."
+                "Click Queue Status to follow it, Stop to end it after the current batch."
             ),
         }
 
     def _run_pipeline(self, content_type, unit, settings, scheduled, clean, scan, process, generate):
-        """Scan, then process batches until the queue is empty, paused or a
-        batch cannot start."""
+        """Scan, then process batches until the queue is empty, a stop is
+        requested or a batch cannot start."""
         import logging
 
         logger = logging.getLogger("vod_manager.pipeline")
@@ -725,6 +701,8 @@ class Plugin:
                 parts.append(f"Recovered {recovered} {unit} left in progress by an interrupted run.")
             # Titles that were waiting for vod-probe get another chance now.
             self.store.requeue_waiting(content_type)
+            # A stop asked for while nothing ran must not cancel this run.
+            self.store.clear_stop(content_type)
             if settings.get("auto_clean_titles"):
                 parts.append(clean(settings).get("message", ""))
             parts.append(scan(settings).get("message", ""))
@@ -732,7 +710,12 @@ class Plugin:
             totals = {"processed": 0, "errors": 0, "pruned": 0}
             stop_message = ""
             queue_empty = False
+            stopped = False
             while True:
+                if self.store.stop_requested(content_type):
+                    self.store.clear_stop(content_type)
+                    stopped = True
+                    break
                 self.store.renew_lock(lock)
                 _release_db_connections()
                 # A batch can outlast the lock's staleness window, so every
@@ -750,7 +733,9 @@ class Plugin:
                 f"Processed {totals['processed']} {unit} ({totals['errors']} errors), "
                 f"{'would prune' if dry_run else 'pruned'} {totals['pruned']}."
             )
-            if stop_message and not queue_empty:
+            if stopped:
+                parts.append("Stopped on request; run Scan + Process again to carry on.")
+            elif stop_message and not queue_empty:
                 parts.append(stop_message)
             counts = self.store.queue_counts(content_type)
             if counts["waiting"]:
@@ -770,7 +755,7 @@ class Plugin:
             message = " | ".join(part for part in parts if part)
             logger.info("Scan + Process (%s) finished: %s", content_type, message)
             self._notify_run_finished(
-                unit, message, stopped=self.store.is_paused(content_type), logger=logger
+                unit, message, stopped=stopped, logger=logger
             )
             return {"status": "ok", "message": message}
         finally:
@@ -937,13 +922,6 @@ class Plugin:
         if not acquired:
             return self._busy_lock_message("A movie batch" if is_movie else "A series batch", held_since)
         try:
-            if self.store.is_paused(content_type):
-                return {
-                    "status": "ok",
-                    "message": "Queue is paused — resume it to process." if is_movie
-                    else "Series queue is paused — resume it to process.",
-                }
-
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
@@ -1079,117 +1057,6 @@ class Plugin:
             "message": f"Scanned {scanned} series, enqueued {enqueued} new/changed.",
         }
 
-    # --- series: retry a fetch Dispatcharr wrongly considers "done" --------
-    #
-    # apps/vod/tasks.py's refresh_series_episodes() sets
-    # custom_properties['episodes_fetched'] = True after ANY provider
-    # response that doesn't raise — including one with an empty episode
-    # list, e.g. from a transient provider glitch. Nothing in Dispatcharr
-    # ever re-checks or clears that flag, so a relation unlucky enough to
-    # hit an empty response on its one attempt stays stuck at zero
-    # episodes forever, even once the provider's real data is fine.
-    # _process_one_series_once (above) only calls refresh_series_episodes
-    # when this flag is falsy, so flipping it back and re-queuing the
-    # series is enough to force a genuine retry through the normal
-    # pipeline — no separate retry codepath needed. Reported upstream
-    # as a distinct case from Dispatcharr/Dispatcharr#556 (that one's
-    # triggered by a crash during the sync, logged as an ERROR; this one
-    # is a silent, error-free empty response).
-    _MAX_EMPTY_FETCH_RETRIES = 3
-    # Provider calls per click, so a big catalogue can't turn one click into
-    # hundreds of requests at once — just click again for the rest.
-    _MAX_PROVIDER_CHECKS = 60
-
-    def _provider_episode_count(self, relation):
-        from core.xtream_codes import Client
-        from .episodes import count_provider_episodes
-
-        account = relation.m3u_account
-        with Client(
-            account.server_url, account.username, account.password, account.get_user_agent_string()
-        ) as client:
-            return count_provider_episodes(client.get_series_info(relation.external_series_id))
-
-    def _retry_empty_series_fetches(self, settings):
-        from collections import defaultdict
-
-        from django.db.models import Count
-        from apps.vod.models import M3USeriesRelation
-        from .episodes import is_incomplete, needs_provider_check
-
-        relations = list(
-            M3USeriesRelation.objects.filter(m3u_account__is_active=True)
-            .annotate(n_episodes=Count("episode_relations"))
-            .select_related("m3u_account")
-        )
-        by_series = defaultdict(list)
-        for relation in relations:
-            by_series[relation.series_id].append(relation)
-
-        reset_empty = reset_partial = capped = unchecked = check_errors = 0
-        checks = 0
-        series_to_requeue = set()
-        for relation in relations:
-            props = relation.custom_properties or {}
-            if not props.get("episodes_fetched"):
-                # Never fetched at all yet — not "stuck", just not reached
-                # by the normal pipeline yet. Leave it alone.
-                continue
-
-            partial = False
-            if relation.n_episodes > 0:
-                sibling_max = max(
-                    (r.n_episodes for r in by_series[relation.series_id] if r.id != relation.id),
-                    default=0,
-                )
-                if not needs_provider_check(relation.n_episodes, sibling_max):
-                    continue
-                if checks >= self._MAX_PROVIDER_CHECKS:
-                    unchecked += 1
-                    continue
-                checks += 1
-                try:
-                    provider_count = self._provider_episode_count(relation)
-                except Exception:  # noqa: BLE001 - one unreachable series must not abort the sweep
-                    check_errors += 1
-                    continue
-                time.sleep(0.5)
-                if not is_incomplete(relation.n_episodes, provider_count):
-                    continue
-                partial = True
-
-            key = f"empty_series_retry_count:{relation.id}"
-            attempts = self.store.get_state(key, 0)
-            if attempts >= self._MAX_EMPTY_FETCH_RETRIES:
-                capped += 1
-                continue
-
-            props["episodes_fetched"] = False
-            relation.custom_properties = props
-            relation.save(update_fields=["custom_properties"])
-            self.store.set_state(key, attempts + 1)
-            series_to_requeue.add(relation.series_id)
-            if partial:
-                reset_partial += 1
-            else:
-                reset_empty += 1
-
-        for series_id in series_to_requeue:
-            self.store.requeue(CONTENT_TYPE_SERIES, series_id)
-
-        msg = (
-            f"Reset {reset_empty + reset_partial} relation(s) across {len(series_to_requeue)} series "
-            f"({reset_empty} empty, {reset_partial} partial) — re-queued for a fresh fetch on the "
-            "next Scan + Process."
-        )
-        if unchecked:
-            msg += f" {unchecked} more suspicious relation(s) not checked yet (limit {self._MAX_PROVIDER_CHECKS} provider calls per click) — click again."
-        if check_errors:
-            msg += f" {check_errors} could not be checked (provider unreachable)."
-        if capped:
-            msg += f" {capped} relation(s) skipped (already retried {self._MAX_EMPTY_FETCH_RETRIES}x)."
-        return {"status": "ok", "message": msg}
-
     def _scan_and_process_series(self, settings, scheduled=False):
         return self._run_pipeline(
             CONTENT_TYPE_SERIES, "series", settings, scheduled,
@@ -1270,7 +1137,6 @@ class Plugin:
     def _queue_status(self, content_type):
         counts = self.store.queue_counts(content_type)
         last = self.store.last_run(content_type)
-        paused = self.store.is_paused(content_type)
         running_since = self.store.lock_held_since(
             self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
         )
@@ -1280,7 +1146,6 @@ class Plugin:
         msg = (
             f"{running}pending={counts['pending']} in_progress={counts['in_progress']} waiting={counts['waiting']} "
             f"done={counts['done']} error={counts['error']}"
-            f"{' [PAUSED]' if paused else ''}"
         )
         if last:
             mode = "dry-run" if last["dry_run"] else "live"
@@ -1640,7 +1505,7 @@ class Plugin:
 
     def _reset_plugin_state(self, settings):
         """Wipes this plugin's own sidecar state (queues, known
-        relation sets, pause flags, run history, catalog stats, .strm
+        relation sets, stop requests, run history, catalog stats, .strm
         tracking) so the next Scan/Process starts completely from scratch.
         Never touches Dispatcharr's own database or any real .strm file —
         pair with Delete .strm Files if you also want those gone."""
@@ -1674,7 +1539,6 @@ class Plugin:
         "scan_series",
         "generate_movie_strm",
         "generate_series_strm",
-        "retry_empty_series_fetches",
     )
 
     def _parse_cron(self, cron_expr):

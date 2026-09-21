@@ -72,17 +72,43 @@ def test_pipeline_processes_batches_until_the_queue_is_empty():
     with_plugin(run)
 
 
-def test_pipeline_reports_why_it_stopped_when_paused():
+def test_a_stop_request_ends_the_run_after_the_current_batch_and_is_consumed():
     def run(plugin):
-        batches = [
-            {"status": "ok", "message": "b1", "claimed": 5, "processed": 5, "errors": 5, "pruned": 0},
-            {"status": "ok", "message": "Queue is paused — resume it to process."},
-        ]
-        _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
-        assert "Queue is paused" in result["message"]
+        calls = []
+
+        def process(_s, _progress):
+            calls.append(1)
+            plugin.store.request_stop("movie")  # the user clicks Stop during the first batch
+            return {"status": "ok", "message": "b", "claimed": 5, "processed": 5, "errors": 0, "pruned": 0}
+
+        _, result = run_pipeline(plugin, process)
+        assert calls == [1]
+        assert "Stopped on request" in result["message"]
+        assert plugin.store.stop_requested("movie") is False
 
     with_plugin(run)
 
+
+def test_a_stop_asked_for_while_nothing_ran_does_not_cancel_the_next_run():
+    def run(plugin):
+        plugin.store.request_stop("movie")
+        batches = [{"status": "ok", "message": "Nothing queued.", "queue_empty": True}]
+        _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
+        assert batches == [] and "Stopped on request" not in result["message"]
+
+    with_plugin(run)
+
+
+def test_the_stop_button_only_does_something_while_a_run_is_live():
+    def run(plugin):
+        assert "Nothing is running" in plugin._request_stop("movie")["message"]
+        assert plugin.store.stop_requested("movie") is False
+        plugin.store.try_acquire_lock("scan_and_process_movie")
+        assert "Stop requested" in plugin._request_stop("movie")["message"]
+        assert plugin.store.stop_requested("movie") is True
+        assert plugin.store.stop_requested("series") is False
+
+    with_plugin(run)
 
 def test_pipeline_recovers_titles_left_in_progress_by_a_restart():
     def run(plugin):
