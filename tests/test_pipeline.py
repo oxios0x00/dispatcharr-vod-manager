@@ -57,8 +57,8 @@ def run_pipeline(plugin, process, settings=None, scheduled=False, generate=None)
 def test_pipeline_processes_batches_until_the_queue_is_empty():
     def run(plugin):
         batches = [
-            {"status": "ok", "message": "b1", "processed": 30, "errors": 2, "pruned": 5},
-            {"status": "ok", "message": "b2", "processed": 10, "errors": 0, "pruned": 1},
+            {"status": "ok", "message": "b1", "claimed": 30, "processed": 30, "errors": 2, "pruned": 5},
+            {"status": "ok", "message": "b2", "claimed": 10, "processed": 10, "errors": 0, "pruned": 1},
             {"status": "ok", "message": "Nothing queued. Run Scan Movies first.", "queue_empty": True},
         ]
         calls, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
@@ -75,7 +75,7 @@ def test_pipeline_processes_batches_until_the_queue_is_empty():
 def test_pipeline_reports_why_it_stopped_when_paused():
     def run(plugin):
         batches = [
-            {"status": "ok", "message": "b1", "processed": 5, "errors": 5, "pruned": 0},
+            {"status": "ok", "message": "b1", "claimed": 5, "processed": 5, "errors": 5, "pruned": 0},
             {"status": "ok", "message": "Queue is paused — resume it to process."},
         ]
         _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
@@ -212,5 +212,42 @@ def test_generate_in_the_background_runs_it_and_reports_the_outcome():
         assert result["message"] == "Created 3 files."
         assert notified["message"] == "Created 3 files." and not notified["stopped"]
         assert "generated" in notified["title"]
+
+    with_plugin(run)
+
+
+def test_pipeline_goes_on_after_a_batch_made_only_of_waiting_titles():
+    def run(plugin):
+        batches = [
+            {"status": "ok", "message": "w", "claimed": 5, "processed": 0, "errors": 0, "pruned": 0, "waiting": 5},
+            {"status": "ok", "message": "b", "claimed": 3, "processed": 3, "errors": 0, "pruned": 2, "waiting": 0},
+            {"status": "ok", "message": "Nothing queued.", "queue_empty": True},
+        ]
+        _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
+        assert batches == []
+        assert "Processed 3 movies (0 errors), pruned 2." in result["message"]
+
+    with_plugin(run)
+
+
+def test_pipeline_gives_waiting_titles_another_chance_and_reports_the_ones_still_waiting():
+    def run(plugin):
+        plugin.store.enqueue("movie", 1)
+        plugin.store.claim_batch("movie", 1)
+        plugin.store.mark_waiting("movie", 1)
+        seen = {}
+
+        def process(_s, _progress):
+            if "counts" not in seen:
+                seen["counts"] = plugin.store.queue_counts("movie")
+                plugin.store.claim_batch("movie", 10)
+                plugin.store.mark_waiting("movie", 1)
+                return {"status": "ok", "message": "w", "claimed": 1, "processed": 0, "errors": 0,
+                        "pruned": 0, "waiting": 1}
+            return {"status": "ok", "message": "Nothing queued.", "queue_empty": True}
+
+        _, result = run_pipeline(plugin, process)
+        assert seen["counts"]["pending"] == 1 and seen["counts"]["waiting"] == 0
+        assert "1 movies waiting for vod-probe" in result["message"]
 
     with_plugin(run)

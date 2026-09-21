@@ -15,11 +15,6 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-try:
-    from .probe_summary import dumps_compact
-except ImportError:  # imported as a top-level module by the unit tests
-    from probe_summary import dumps_compact
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS probe_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,33 +35,6 @@ CREATE TABLE IF NOT EXISTS known_relations (
     relation_ids TEXT NOT NULL,
     updated_at REAL NOT NULL,
     PRIMARY KEY (content_type, content_id)
-);
-
--- relation_id alone is NOT a safe key once more than one content type is
--- stored here: M3UMovieRelation and M3UEpisodeRelation are separate Django
--- tables with their own independent autoincrement ids, so a movie relation
--- and an episode relation can share the same numeric id. Keyed on
--- (content_type, relation_id) from the start for series/episode support.
-CREATE TABLE IF NOT EXISTS relation_probes (
-    content_type TEXT NOT NULL DEFAULT 'movie',
-    relation_id INTEGER NOT NULL,
-    probed_at REAL NOT NULL,
-    ok INTEGER NOT NULL,
-    error TEXT,
-    width INTEGER,
-    height INTEGER,
-    quality_label TEXT,
-    video_codec TEXT,
-    video_bitrate INTEGER,
-    probe_version INTEGER NOT NULL DEFAULT 0,
-    hdr_type TEXT,
-    audio_languages TEXT,
-    audio_description_languages TEXT,
-    subtitle_languages TEXT,
-    duration_secs REAL,
-    raw_json TEXT,
-    sampled_from_relation_id INTEGER,
-    PRIMARY KEY (content_type, relation_id)
 );
 
 CREATE TABLE IF NOT EXISTS plugin_state (
@@ -123,91 +91,12 @@ CREATE TABLE IF NOT EXISTS run_locks (
 """
 
 
-# Columns added after the initial schema — CREATE TABLE IF NOT EXISTS
-# leaves an already-existing table untouched, so new columns need an
-# explicit ALTER TABLE for anyone upgrading an existing state.sqlite3.
-_MIGRATIONS = [
-    ("relation_probes", "video_bitrate", "ALTER TABLE relation_probes ADD COLUMN video_bitrate INTEGER"),
-    (
-        "relation_probes",
-        "probe_version",
-        "ALTER TABLE relation_probes ADD COLUMN probe_version INTEGER NOT NULL DEFAULT 0",
-    ),
-]
-
-
-def _migrate_relation_probes_content_type(conn):
-    """One-time structural migration: relation_probes used to be keyed on
-    relation_id alone (PRIMARY KEY), which only worked because it stored a
-    single content type (movies). Adding series/episode probes to the same
-    table needs a composite (content_type, relation_id) key instead — a
-    plain ALTER TABLE can't change a SQLite primary key, so this rebuilds
-    the table. Every pre-existing row predates series support, so it's
-    tagged content_type='movie', which is the only type it could ever have
-    held."""
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(relation_probes)")}
-    if "content_type" in existing_cols or not existing_cols:
-        return  # already migrated, or table doesn't exist yet (fresh install)
-
-    conn.executescript(
-        """
-        ALTER TABLE relation_probes RENAME TO relation_probes_old;
-        CREATE TABLE relation_probes (
-            content_type TEXT NOT NULL DEFAULT 'movie',
-            relation_id INTEGER NOT NULL,
-            probed_at REAL NOT NULL,
-            ok INTEGER NOT NULL,
-            error TEXT,
-            width INTEGER,
-            height INTEGER,
-            quality_label TEXT,
-            video_codec TEXT,
-            video_bitrate INTEGER,
-            probe_version INTEGER NOT NULL DEFAULT 0,
-            hdr_type TEXT,
-            audio_languages TEXT,
-            audio_description_languages TEXT,
-            subtitle_languages TEXT,
-            duration_secs REAL,
-            raw_json TEXT,
-            sampled_from_relation_id INTEGER,
-            PRIMARY KEY (content_type, relation_id)
-        );
-        INSERT INTO relation_probes (
-            content_type, relation_id, probed_at, ok, error, width, height,
-            quality_label, video_codec, video_bitrate, probe_version, hdr_type,
-            audio_languages, audio_description_languages, subtitle_languages,
-            duration_secs, raw_json
-        )
-        SELECT
-            'movie', relation_id, probed_at, ok, error, width, height,
-            quality_label, video_codec, video_bitrate, probe_version, hdr_type,
-            audio_languages, audio_description_languages, subtitle_languages,
-            duration_secs, raw_json
-        FROM relation_probes_old;
-        DROP TABLE relation_probes_old;
-        """
-    )
-
-
 class Store:
     def __init__(self, data_dir):
         os.makedirs(data_dir, exist_ok=True)
         self.db_path = os.path.join(data_dir, "state.sqlite3")
         with self._connect() as conn:
             conn.executescript(SCHEMA)
-            self._run_migrations(conn)
-
-    def _run_migrations(self, conn):
-        # Simple ADD COLUMN migrations must run first: the structural
-        # content_type rebuild below copies relation_probes by full column
-        # list, so the old table needs every pre-content_type column
-        # (video_bitrate, probe_version) already present before it's copied.
-        for table, column, ddl in _MIGRATIONS:
-            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-            if column not in existing:
-                conn.execute(ddl)
-        _migrate_relation_probes_content_type(conn)
 
     @contextmanager
     def _connect(self):
@@ -320,17 +209,23 @@ class Store:
                 (time.time(), content_type),
             ).rowcount
 
-    def release_claimed(self, content_type, content_ids):
-        """Put titles a batch claimed but never started back in the queue."""
+    def mark_waiting(self, content_type, content_id):
+        """Set a title aside until vod-probe has measured all its relations."""
         with self._connect() as conn:
-            for chunk in self._chunks(content_ids):
-                placeholders = ",".join("?" for _ in chunk)
-                conn.execute(
-                    f"UPDATE probe_queue SET status = 'pending', updated_at = ? "
-                    f"WHERE content_type = ? AND status = 'in_progress' "
-                    f"AND content_id IN ({placeholders})",
-                    (time.time(), content_type, *chunk),
-                )
+            conn.execute(
+                "UPDATE probe_queue SET status = 'waiting', updated_at = ? "
+                "WHERE content_type = ? AND content_id = ?",
+                (time.time(), content_type, content_id),
+            )
+
+    def requeue_waiting(self, content_type):
+        """Give every waiting title another chance. Returns how many."""
+        with self._connect() as conn:
+            return conn.execute(
+                "UPDATE probe_queue SET status = 'pending', updated_at = ? "
+                "WHERE content_type = ? AND status = 'waiting'",
+                (time.time(), content_type),
+            ).rowcount
 
     def mark_error(self, content_type, content_id, error):
         with self._connect() as conn:
@@ -348,7 +243,7 @@ class Store:
                 "WHERE content_type = ? GROUP BY status",
                 (content_type,),
             ).fetchall()
-            counts = {"pending": 0, "in_progress": 0, "done": 0, "error": 0}
+            counts = {"pending": 0, "in_progress": 0, "waiting": 0, "done": 0, "error": 0}
             for r in rows:
                 counts[r["status"]] = r["n"]
             return counts
@@ -390,108 +285,6 @@ class Store:
                 "ON CONFLICT(content_type, content_id) DO UPDATE SET "
                 "relation_ids = excluded.relation_ids, updated_at = excluded.updated_at",
                 (content_type, content_id, json.dumps(sorted(relation_ids)), time.time()),
-            )
-
-    # --- relation_probes (cached ffprobe results) -----------------------
-
-    def get_probe(self, content_type, relation_id):
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM relation_probes WHERE content_type = ? AND relation_id = ?",
-                (content_type, relation_id),
-            ).fetchone()
-            return dict(row) if row else None
-
-    def delete_probe(self, content_type, relation_id):
-        """Forces one specific relation to be treated as never-probed (get_probe
-        will return None), without touching any other relation's cache — for a
-        targeted re-probe when a provider swaps a stream's content without
-        changing its stream_id (confirmed happening for real — see NOTES.md)."""
-        with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM relation_probes WHERE content_type = ? AND relation_id = ?",
-                (content_type, relation_id),
-            )
-
-    def get_quality_labels(self, content_type, relation_ids):
-        """Bulk relation_id -> quality_label for successfully-probed rows
-        (used for catalogue-composition reporting, not selection — reads
-        whatever quality was last probed, regardless of probe_version)."""
-        if not relation_ids:
-            return {}
-        with self._connect() as conn:
-            result = {}
-            # SQLite caps bound variables per statement; chunk defensively.
-            ids = list(relation_ids)
-            for i in range(0, len(ids), 900):
-                chunk = ids[i:i + 900]
-                placeholders = ",".join("?" for _ in chunk)
-                rows = conn.execute(
-                    f"SELECT relation_id, quality_label FROM relation_probes "
-                    f"WHERE content_type = ? AND ok = 1 AND relation_id IN ({placeholders})",
-                    (content_type, *chunk),
-                ).fetchall()
-                result.update({r["relation_id"]: r["quality_label"] for r in rows})
-            return result
-
-    @staticmethod
-    def _probe_payload(result):
-        """What goes in the raw_json column: the compact summary of a
-        successful probe (a kilobyte or so), or — so a failure stays
-        diagnosable — a size-capped copy of ffprobe's raw output when a
-        probe found no video stream. The column name predates the compact
-        form and is kept to avoid a table rebuild."""
-        summary = result.get("summary")
-        if summary:
-            return dumps_compact(summary)
-        raw = result.get("raw")
-        if raw:
-            return json.dumps(raw, separators=(",", ":"), ensure_ascii=False)[:8000]
-        return None
-
-    def save_probe(self, content_type, relation_id, result, sampled_from_relation_id=None):
-        """sampled_from_relation_id marks a row as copied from another
-        relation's real probe (episode sampling extrapolation) rather than
-        independently measured — see NOTES.md, episode sampling."""
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO relation_probes "
-                "(content_type, relation_id, probed_at, ok, error, width, height, quality_label, "
-                "video_codec, video_bitrate, probe_version, hdr_type, audio_languages, "
-                "audio_description_languages, subtitle_languages, duration_secs, raw_json, "
-                "sampled_from_relation_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(content_type, relation_id) DO UPDATE SET "
-                "probed_at=excluded.probed_at, ok=excluded.ok, error=excluded.error, "
-                "width=excluded.width, height=excluded.height, quality_label=excluded.quality_label, "
-                "video_codec=excluded.video_codec, video_bitrate=excluded.video_bitrate, "
-                "probe_version=excluded.probe_version, "
-                "hdr_type=excluded.hdr_type, "
-                "audio_languages=excluded.audio_languages, "
-                "audio_description_languages=excluded.audio_description_languages, "
-                "subtitle_languages=excluded.subtitle_languages, "
-                "duration_secs=excluded.duration_secs, raw_json=excluded.raw_json, "
-                "sampled_from_relation_id=excluded.sampled_from_relation_id",
-                (
-                    content_type,
-                    relation_id,
-                    time.time(),
-                    1 if result.get("ok") else 0,
-                    result.get("error"),
-                    result.get("width"),
-                    result.get("height"),
-                    result.get("quality_label"),
-                    result.get("video_codec"),
-                    result.get("video_bitrate"),
-                    result.get("probe_version", 0),
-                    result.get("hdr_type"),
-                    json.dumps(result.get("audio_languages", [])),
-                    json.dumps(result.get("audio_description_languages", [])),
-                    json.dumps(result.get("subtitle_languages", [])),
-                    result.get("duration_secs"),
-                    self._probe_payload(result),
-                    sampled_from_relation_id,
-                ),
             )
 
     # --- run_log ---------------------------------------------------------
@@ -646,7 +439,7 @@ class Store:
 
     @staticmethod
     def _chunks(ids, size=900):
-        # SQLite caps bound variables per statement; same limit get_quality_labels works around.
+        # SQLite caps bound variables per statement.
         ids = list(ids)
         for i in range(0, len(ids), size):
             yield ids[i:i + size]
@@ -679,37 +472,19 @@ class Store:
                 ).rowcount
         return queue, known
 
-    def stored_probe_ids(self, content_type):
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT relation_id FROM relation_probes WHERE content_type = ?", (content_type,)
-            ).fetchall()
-            return {r["relation_id"] for r in rows}
-
-    def delete_probe_rows(self, content_type, relation_ids):
-        deleted = 0
-        with self._connect() as conn:
-            for chunk in self._chunks(relation_ids):
-                marks = ",".join("?" for _ in chunk)
-                deleted += conn.execute(
-                    f"DELETE FROM relation_probes WHERE content_type = ? AND relation_id IN ({marks})",
-                    (content_type, *chunk),
-                ).rowcount
-        return deleted
-
     # --- full reset ------------------------------------------------------
 
     _ALL_TABLES = (
-        "probe_queue", "known_relations", "relation_probes",
+        "probe_queue", "known_relations",
         "plugin_state", "run_log", "catalog_stats", "strm_manifest",
         "run_locks",
     )
 
     def reset_all(self):
-        """Wipes every table this plugin owns: probe cache, queues, known
+        """Wipes every table this plugin owns: queues, known
         relation sets, pause flags, run history, catalog stat snapshots and
         .strm tracking. The next scan re-discovers everything as new and the
-        next process re-probes from scratch. Never touches Dispatcharr's own
+        next process decides every title again. Never touches Dispatcharr's own
         database — only this plugin's own sidecar state."""
         with self._connect() as conn:
             for table in self._ALL_TABLES:

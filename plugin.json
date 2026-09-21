@@ -1,7 +1,7 @@
 {
   "name": "VOD Manager",
-  "version": "1.3.0",
-  "description": "Probes movie/series stream quality and language with ffprobe, keeps one winner per configured tier, and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Dry-run by default.",
+  "version": "2.0.0",
+  "description": "Keeps one winner per configured quality tier from the measurements of the vod-probe plugin and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
   "fields": [
@@ -10,7 +10,7 @@
       "label": "Dry run (log decisions, don't delete anything)",
       "type": "boolean",
       "default": true,
-      "help_text": "ON: probes and decides winners but never deletes anything. Turn OFF once a test batch looks right — pruning is a real delete, only recoverable via Dispatcharr's own next refresh."
+      "help_text": "ON: decides winners but never deletes anything. Turn OFF once a test batch looks right — pruning is a real delete, only recoverable via Dispatcharr's own next refresh."
     },
     {
       "id": "target_qualities",
@@ -49,36 +49,10 @@
       "help_text": "Start small (5-25) to validate before scaling up."
     },
     {
-      "id": "max_concurrent_probes",
-      "label": "Max concurrent probes",
-      "type": "number",
-      "default": 2,
-      "min": 1,
-      "help_text": "Stay below your provider's connection limit — probing uses a real stream connection."
-    },
-    {
-      "id": "max_probes_per_second",
-      "label": "Max probes started per second",
-      "type": "number",
-      "default": 1,
-      "min": 0,
-      "help_text": "Caps launch rate independently of concurrency."
-    },
-    {
-      "id": "circuit_breaker_error_ratio",
-      "label": "Auto-pause queue if error ratio exceeds",
-      "type": "number",
-      "default": 0.5,
-      "min": 0,
-      "max": 1,
-      "step": 0.1,
-      "help_text": "Pauses the queue once this fraction of a batch fails, instead of hammering a struggling provider."
-    },
-    {
       "id": "_section_series",
       "label": "[SERIES]",
       "type": "info",
-      "description": "Same probe/select/prune pipeline as Films, per episode. Uses the same quality/language/dry-run/concurrency settings above."
+      "description": "Same select/prune pipeline as Films, per episode, using the same quality, language and dry-run settings above. The episodes are loaded and measured by vod-probe. Note: when Dispatcharr reloads a series (the interface does it when a series is opened after 24 hours) it erases what vod-probe wrote on that series' episodes, so the series waits until vod-probe has measured it again."
     },
     {
       "id": "series_batch_size",
@@ -87,35 +61,6 @@
       "default": 5,
       "min": 1,
       "help_text": "Smaller than the Films batch size — one series can fan out into dozens of episodes."
-    },
-    {
-      "id": "episode_sampling",
-      "label": "Episode sampling",
-      "type": "select",
-      "default": "first_only",
-      "options": [
-        {
-          "value": "first_only",
-          "label": "Probe first episode per season, apply to the rest (recommended)"
-        },
-        {
-          "value": "sample_n",
-          "label": "Probe first N episodes per season (see setting below)"
-        },
-        {
-          "value": "all",
-          "label": "Probe every episode individually"
-        }
-      ],
-      "help_text": "Probing every episode is slow on long shows. 'First only' assumes a season is encoded consistently; 'Probe first N' verifies that assumption before extrapolating, falling back to per-episode probing if a season turns out inconsistent."
-    },
-    {
-      "id": "episode_sample_size",
-      "label": "Episodes to probe per season (if sampling = 'Probe first N')",
-      "type": "number",
-      "default": 2,
-      "min": 1,
-      "help_text": "Higher = more confidence a season is consistently encoded, at the cost of more probes."
     },
     {
       "id": "_section_title_cleanup",
@@ -192,19 +137,6 @@
       "help_text": "OFF (default): a title with no id still gets a .strm, named from the raw provider title text alone. ON: skip generating (or remove an already-generated) .strm entirely for a title with neither id — some providers never expose one for certain content (confirmed happening for entire series catalogues on at least one provider), and a media server has nothing reliable to identify that file by regardless of how clean the title text is."
     },
     {
-      "id": "_section_reprobe",
-      "label": "[TARGETED RE-PROBE]",
-      "type": "info",
-      "description": "A relation is only ever probed once and trusted forever — if a provider swaps the file behind a stream_id without changing it (confirmed happening for real), the cached quality can go stale silently. Fixes just the one relation you point at, not the whole catalogue."
-    },
-    {
-      "id": "reprobe_stream_id",
-      "label": "Stream ID to force re-probe",
-      "type": "string",
-      "default": "",
-      "help_text": "Copy from a .strm file's URL (?stream_id=...). Works for both movie and episode relations."
-    },
-    {
       "id": "_section_schedule",
       "label": "[SCHEDULE]",
       "type": "info",
@@ -215,7 +147,7 @@
       "label": "Schedule (5-field cron)",
       "type": "string",
       "default": "",
-      "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked."
+      "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked. Best set a few minutes after Dispatcharr's VOD refresh, and after vod-probe has measured what the refresh brought in: a title vod-probe has not measured yet only waits for the next run."
     },
     {
       "id": "schedule_timezone",
@@ -275,7 +207,7 @@
     {
       "id": "scan_and_process",
       "label": "[MOVIES] Scan + Process",
-      "description": "Starts a background run: scans for changed movies, then probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
+      "description": "Starts a background run: scans for changed movies, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A movie whose relations vod-probe has not measured yet waits for the next run. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -307,7 +239,7 @@
     {
       "id": "resume_queue",
       "label": "[MOVIES] Resume Queue",
-      "description": "Clear a pause (manual or circuit-breaker).",
+      "description": "Clear a pause.",
       "button_label": "Resume",
       "button_variant": "outline",
       "button_color": "teal"
@@ -331,7 +263,7 @@
     {
       "id": "scan_and_process_series",
       "label": "[SERIES] Scan + Process",
-      "description": "Starts a background run: scans for changed series, then fetches episodes if needed and probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
+      "description": "Starts a background run: scans for changed series, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A series vod-probe has not finished waits for the next run. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -363,7 +295,7 @@
     {
       "id": "resume_series_queue",
       "label": "[SERIES] Resume Queue",
-      "description": "Clear a pause (manual or circuit-breaker) on the series queue.",
+      "description": "Clear a pause on the series queue.",
       "button_label": "Resume",
       "button_variant": "outline",
       "button_color": "teal"
@@ -401,14 +333,6 @@
       "button_color": "grape"
     },
     {
-      "id": "reprobe_by_stream_id",
-      "label": "[MAINTENANCE] Force Re-probe by Stream ID",
-      "description": "Clears the cached probe for one relation (movie or episode) and re-queues its title, using the Stream ID above. Run Scan + Process afterward to actually redo it.",
-      "button_label": "Re-probe",
-      "button_variant": "outline",
-      "button_color": "orange"
-    },
-    {
       "id": "delete_strm_files",
       "label": "[MAINTENANCE] Delete .strm Files",
       "description": "Deletes every generated .strm (movies and series) and clears the manifest. Real files, real delete.",
@@ -424,7 +348,7 @@
     {
       "id": "prune_orphaned_state",
       "label": "[MAINTENANCE] Prune Orphaned State",
-      "description": "Deletes this plugin's own queue, known-relations and probe-cache rows for movies, series and relations Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
+      "description": "Deletes this plugin's own queue and known-relations rows for movies and series Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
       "button_label": "Prune",
       "button_variant": "outline",
       "button_color": "orange"
@@ -440,14 +364,14 @@
     {
       "id": "reset_plugin_state",
       "label": "[MAINTENANCE] Reset Plugin State",
-      "description": "Wipes the probe cache, queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
+      "description": "Wipes the queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
       "button_label": "Reset",
       "button_variant": "outline",
       "button_color": "red",
       "confirm": {
         "required": true,
         "title": "Reset all plugin state?",
-        "message": "Clears every probe result and queue this plugin has recorded — the next Process Batch/Series will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched."
+        "message": "Clears every queue this plugin has recorded — the next Scan + Process will decide every title again. Dispatcharr's own movies/series/relations are untouched."
       }
     },
     {

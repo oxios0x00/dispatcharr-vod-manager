@@ -1,10 +1,10 @@
 """VOD Manager — automatic quality/language curation for Dispatcharr's VOD
 catalogue.
 
-Probes each M3UMovieRelation/M3UEpisodeRelation for a title with ffprobe,
-picks the winning relation(s) per the target_qualities/target_languages
-algorithm, and prunes the losing relations from Dispatcharr's own
-database. Optionally also generates .strm files pinned directly to each
+Reads the quality, languages and bitrate that the vod-probe plugin measured
+for each M3UMovieRelation/M3UEpisodeRelation, picks the winning relation(s)
+per the target_qualities/target_languages algorithm, and prunes the losing
+relations from Dispatcharr's own database. Optionally also generates .strm files pinned directly to each
 kept relation (see strm.py), for media servers that can't get real
 multi-version playback through Dispatcharr's native Xtream API alone.
 
@@ -13,15 +13,13 @@ a real Dispatcharr instance and the real Dispatcharr source.
 """
 import json
 import os
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CONTENT_TYPE_MOVIE = "movie"
 CONTENT_TYPE_SERIES = "series"
 CONTENT_TYPE_EPISODE = "episode"
 
-# Sibling submodules (.probe/.selection/.store) are imported lazily inside
+# Sibling submodules (.measurements/.selection/.store) are imported lazily inside
 # methods below, not at module top level — matches the defensive pattern
 # used by other Dispatcharr plugins in this ecosystem (see e.g.
 # iptv_checker/plugin.py's `from . import notify_report, reports` done
@@ -30,16 +28,9 @@ CONTENT_TYPE_EPISODE = "episode"
 
 
 def _release_db_connections():
-    """Hands this thread's database connection back to Dispatcharr's pool.
-
-    Each batch runs its per-title work in a ThreadPoolExecutor. Under
-    Dispatcharr's gevent pool (MAX_CONNS = 8 per web worker) every such
-    thread checks a connection out on its first query and, unlike the request
-    greenlet, nobody returns it: Dispatcharr only calls close_old_connections()
-    for the greenlet that ran the action. Batch after batch, the leaked
-    checkouts filled a worker's pool, after which anything needing the
-    database in that worker (login, saving settings, the next batch's own
-    threads) waited forever — the 504s and the frozen batches of 2026-09-19."""
+    """Hands this thread's database connection back to Dispatcharr's pool. A
+    Scan + Process runs for a long time in one Celery thread; closing its
+    connection between batches keeps it from pinning one meanwhile."""
     from django.db import connections
 
     connections.close_all()
@@ -51,34 +42,17 @@ def _parse_csv_list(value):
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
-class _RateLimiter:
-    """Minimum-interval limiter shared across worker threads: caps probes
-    per second independently of how many run concurrently."""
-
-    def __init__(self, max_per_second):
-        self._min_interval = 1.0 / max_per_second if max_per_second > 0 else 0
-        self._lock = threading.Lock()
-        self._next_allowed = 0.0
-
-    def wait(self):
-        if self._min_interval <= 0:
-            return
-        with self._lock:
-            now = time.monotonic()
-            start_at = max(now, self._next_allowed)
-            self._next_allowed = start_at + self._min_interval
-        sleep_for = start_at - time.monotonic()
-        if sleep_for > 0:
-            time.sleep(sleep_for)
+class _WaitingForMeasurements(Exception):
+    """A title has a relation vod-probe has not measured yet."""
 
 
 class Plugin:
     name = "VOD Manager"
-    version = "1.3.0"
+    version = "2.0.0"
     description = (
-        "Probes movie/series stream quality and language with ffprobe, keeps one "
-        "winner per configured tier, and prunes the rest — with optional .strm "
-        "generation for real multi-version playback in Emby/Jellyfin. Dry-run by "
+        "Keeps one winner per configured quality tier from the measurements of the "
+        "vod-probe plugin and prunes the rest — with optional .strm generation for "
+        "real multi-version playback in Emby/Jellyfin. Needs vod-probe. Dry-run by "
         "default."
     )
     author = "oxios0x00"
@@ -98,7 +72,7 @@ class Plugin:
             "type": "boolean",
             "default": True,
             "help_text": (
-                "ON: probes and decides winners but never deletes anything. "
+                "ON: decides winners but never deletes anything. "
                 "Turn OFF once a test batch looks right — pruning is a real "
                 "delete, only recoverable via Dispatcharr's own next refresh."
             ),
@@ -151,38 +125,14 @@ class Plugin:
             "help_text": "Start small (5-25) to validate before scaling up.",
         },
         {
-            "id": "max_concurrent_probes",
-            "label": "Max concurrent probes",
-            "type": "number",
-            "default": 2,
-            "min": 1,
-            "help_text": "Stay below your provider's connection limit — probing uses a real stream connection.",
-        },
-        {
-            "id": "max_probes_per_second",
-            "label": "Max probes started per second",
-            "type": "number",
-            "default": 1,
-            "min": 0,
-            "help_text": "Caps launch rate independently of concurrency.",
-        },
-        {
-            "id": "circuit_breaker_error_ratio",
-            "label": "Auto-pause queue if error ratio exceeds",
-            "type": "number",
-            "default": 0.5,
-            "min": 0,
-            "max": 1,
-            "step": 0.1,
-            "help_text": "Pauses the queue once this fraction of a batch fails, instead of hammering a struggling provider.",
-        },
-        {
             "id": "_section_series",
             "label": "[SERIES]",
             "type": "info",
             "description": (
-                "Same probe/select/prune pipeline as Films, per episode. Uses the "
-                "same quality/language/dry-run/concurrency settings above."
+                "Same select/prune pipeline as Films, per episode, using the same quality, language and "
+                "dry-run settings above. The episodes are loaded and measured by vod-probe. Note: when Dispatcharr "
+                "reloads a series (the interface does it when a series is opened after 24 hours) it erases what "
+                "vod-probe wrote on that series' episodes, so the series waits until vod-probe has measured it again."
             ),
         },
         {
@@ -192,30 +142,6 @@ class Plugin:
             "default": 5,
             "min": 1,
             "help_text": "Smaller than the Films batch size — one series can fan out into dozens of episodes.",
-        },
-        {
-            "id": "episode_sampling",
-            "label": "Episode sampling",
-            "type": "select",
-            "default": "first_only",
-            "options": [
-                {"value": "first_only", "label": "Probe first episode per season, apply to the rest (recommended)"},
-                {"value": "sample_n", "label": "Probe first N episodes per season (see setting below)"},
-                {"value": "all", "label": "Probe every episode individually"},
-            ],
-            "help_text": (
-                "Probing every episode is slow on long shows. 'First only' assumes a season is encoded "
-                "consistently; 'Probe first N' verifies that assumption before extrapolating, falling back "
-                "to per-episode probing if a season turns out inconsistent."
-            ),
-        },
-        {
-            "id": "episode_sample_size",
-            "label": "Episodes to probe per season (if sampling = 'Probe first N')",
-            "type": "number",
-            "default": 2,
-            "min": 1,
-            "help_text": "Higher = more confidence a season is consistently encoded, at the cost of more probes.",
         },
         {
             "id": "_section_title_cleanup",
@@ -309,23 +235,6 @@ class Plugin:
             "help_text": "OFF (default): a title with no id still gets a .strm, named from the raw provider title text alone. ON: skip generating (or remove an already-generated) .strm entirely for a title with neither id — some providers never expose one for certain content (confirmed happening for entire series catalogues on at least one provider), and a media server has nothing reliable to identify that file by regardless of how clean the title text is.",
         },
         {
-            "id": "_section_reprobe",
-            "label": "[TARGETED RE-PROBE]",
-            "type": "info",
-            "description": (
-                "A relation is only ever probed once and trusted forever — if a provider swaps the file "
-                "behind a stream_id without changing it (confirmed happening for real), the cached quality "
-                "can go stale silently. Fixes just the one relation you point at, not the whole catalogue."
-            ),
-        },
-        {
-            "id": "reprobe_stream_id",
-            "label": "Stream ID to force re-probe",
-            "type": "string",
-            "default": "",
-            "help_text": "Copy from a .strm file's URL (?stream_id=...). Works for both movie and episode relations.",
-        },
-        {
             "id": "_section_schedule",
             "label": "[SCHEDULE]",
             "type": "info",
@@ -336,7 +245,7 @@ class Plugin:
             "label": "Schedule (5-field cron)",
             "type": "string",
             "default": "",
-            "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked.",
+            "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked. Best set a few minutes after Dispatcharr's VOD refresh, and after vod-probe has measured what the refresh brought in: a title vod-probe has not measured yet only waits for the next run.",
         },
         {
             "id": "schedule_timezone",
@@ -370,7 +279,7 @@ class Plugin:
         {
             "id": "scan_and_process",
             "label": "[MOVIES] Scan + Process",
-            "description": "Starts a background run: scans for changed movies, then probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
+            "description": "Starts a background run: scans for changed movies, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A movie whose relations vod-probe has not measured yet waits for the next run. The click returns at once; follow it with Queue Status, stop it with Pause Queue.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -402,7 +311,7 @@ class Plugin:
         {
             "id": "resume_queue",
             "label": "[MOVIES] Resume Queue",
-            "description": "Clear a pause (manual or circuit-breaker).",
+            "description": "Clear a pause.",
             "button_label": "Resume",
             "button_variant": "outline",
             "button_color": "teal",
@@ -426,7 +335,7 @@ class Plugin:
         {
             "id": "scan_and_process_series",
             "label": "[SERIES] Scan + Process",
-            "description": "Starts a background run: scans for changed series, then fetches episodes if needed and probes/selects/prunes batch after batch until the queue is empty or paused. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
+            "description": "Starts a background run: scans for changed series, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or paused. A series vod-probe has not finished waits for the next run. The click returns at once; follow it with Series Queue Status, stop it with Pause Queue.",
             "button_label": "Run",
             "button_variant": "filled",
             "button_color": "green",
@@ -458,7 +367,7 @@ class Plugin:
         {
             "id": "resume_series_queue",
             "label": "[SERIES] Resume Queue",
-            "description": "Clear a pause (manual or circuit-breaker) on the series queue.",
+            "description": "Clear a pause on the series queue.",
             "button_label": "Resume",
             "button_variant": "outline",
             "button_color": "teal",
@@ -496,14 +405,6 @@ class Plugin:
             "button_color": "grape",
         },
         {
-            "id": "reprobe_by_stream_id",
-            "label": "[MAINTENANCE] Force Re-probe by Stream ID",
-            "description": "Clears the cached probe for one relation (movie or episode) and re-queues its title, using the Stream ID above. Run Scan + Process afterward to actually redo it.",
-            "button_label": "Re-probe",
-            "button_variant": "outline",
-            "button_color": "orange",
-        },
-        {
             "id": "delete_strm_files",
             "label": "[MAINTENANCE] Delete .strm Files",
             "description": "Deletes every generated .strm (movies and series) and clears the manifest. Real files, real delete.",
@@ -519,7 +420,7 @@ class Plugin:
         {
             "id": "prune_orphaned_state",
             "label": "[MAINTENANCE] Prune Orphaned State",
-            "description": "Deletes this plugin's own queue, known-relations and probe-cache rows for movies, series and relations Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
+            "description": "Deletes this plugin's own queue and known-relations rows for movies and series Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
             "button_label": "Prune",
             "button_variant": "outline",
             "button_color": "orange",
@@ -535,14 +436,14 @@ class Plugin:
         {
             "id": "reset_plugin_state",
             "label": "[MAINTENANCE] Reset Plugin State",
-            "description": "Wipes the probe cache, queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
+            "description": "Wipes the queues, known relations, run history and catalog stats — starts fresh on the next Scan/Process.",
             "button_label": "Reset",
             "button_variant": "outline",
             "button_color": "red",
             "confirm": {
                 "required": True,
                 "title": "Reset all plugin state?",
-                "message": "Clears every probe result and queue this plugin has recorded — the next Scan + Process will re-probe everything from scratch. Dispatcharr's own movies/series/relations are untouched.",
+                "message": "Clears every queue this plugin has recorded — the next Scan + Process will decide every title again. Dispatcharr's own movies/series/relations are untouched.",
             },
         },
         {
@@ -636,8 +537,6 @@ class Plugin:
             return self._prune_orphaned_state(settings)
         if action_id == "retry_errored_titles":
             return self._retry_errored_titles()
-        if action_id == "reprobe_by_stream_id":
-            return self._reprobe_by_stream_id(settings)
         if action_id == "pause_series_queue":
             self.store.set_paused(CONTENT_TYPE_SERIES, True)
             return {"status": "ok", "message": "Series queue paused."}
@@ -682,8 +581,8 @@ class Plugin:
     # --- background runs -----------------------------------------------------
     #
     # Scan + Process runs in a Celery worker, not in the request that clicked
-    # it: probing a batch takes minutes, longer than the browser (about a
-    # minute here) or nginx (300 s) will wait, so a synchronous click ended
+    # it: a whole catalogue takes longer than the browser (about a minute
+    # here) or nginx (300 s) will wait, so a synchronous click ended
     # in a 504 while the work carried on unseen. The click now only queues the
     # task; Queue Status shows how far it got and Pause Queue stops it after
     # the current batch.
@@ -735,15 +634,15 @@ class Plugin:
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
             }
         queue = self.store.queue_counts(content_type)
-        if queue["pending"] or queue["in_progress"]:
+        if queue["pending"] or queue["in_progress"] or queue["waiting"]:
             queue_name = "Queue Status" if content_type == CONTENT_TYPE_MOVIE else "Series Queue Status"
             return {
                 "status": "error",
                 "message": (
                     f"{queue['pending']} {'movie(s)' if content_type == CONTENT_TYPE_MOVIE else 'series'} pending, "
-                    f"{queue['in_progress']} in progress — "
-                    f"finish Scan + Process first ({queue_name} should read 0 pending and 0 in "
-                    "progress). Generating now would give still-unprobed titles a '- unprobed' "
+                    f"{queue['in_progress']} in progress, {queue['waiting']} waiting for vod-probe — "
+                    f"finish Scan + Process first ({queue_name} should read 0 pending, 0 in "
+                    "progress and 0 waiting). Generating now would give still-unmeasured titles a '- unprobed' "
                     "filename and write a file for a relation that's about to be pruned, only for "
                     "it to disappear on the next Generate run."
                 ),
@@ -804,8 +703,8 @@ class Plugin:
         }
 
     def _run_pipeline(self, content_type, unit, settings, scheduled, clean, scan, process, generate):
-        """Scan, then process batches until the queue is empty, paused (by
-        hand or by the circuit breaker) or a batch cannot start."""
+        """Scan, then process batches until the queue is empty, paused or a
+        batch cannot start."""
         import logging
 
         logger = logging.getLogger("vod_manager.pipeline")
@@ -824,6 +723,8 @@ class Plugin:
             recovered = self.store.requeue_in_progress(content_type)
             if recovered:
                 parts.append(f"Recovered {recovered} {unit} left in progress by an interrupted run.")
+            # Titles that were waiting for vod-probe get another chance now.
+            self.store.requeue_waiting(content_type)
             if settings.get("auto_clean_titles"):
                 parts.append(clean(settings).get("message", ""))
             parts.append(scan(settings).get("message", ""))
@@ -833,13 +734,11 @@ class Plugin:
             queue_empty = False
             while True:
                 self.store.renew_lock(lock)
-                # Hand this thread's connection back between batches, as the
-                # batch threads do, so a long run never pins one.
                 _release_db_connections()
                 # A batch can outlast the lock's staleness window, so every
                 # finished title renews it too.
                 result = process(settings, lambda: self.store.renew_lock(lock))
-                if not result.get("processed"):
+                if not result.get("claimed"):
                     stop_message = result.get("message", "")
                     queue_empty = bool(result.get("queue_empty"))
                     break
@@ -853,7 +752,13 @@ class Plugin:
             )
             if stop_message and not queue_empty:
                 parts.append(stop_message)
-            errored = self.store.queue_counts(content_type)["error"]
+            counts = self.store.queue_counts(content_type)
+            if counts["waiting"]:
+                parts.append(
+                    f"{counts['waiting']} {unit} waiting for vod-probe to measure them: check that "
+                    "vod-probe is installed and has run, then run Scan + Process again."
+                )
+            errored = counts["error"]
             if errored:
                 parts.append(
                     f"{errored} {unit} in error, left alone until their relations change — "
@@ -902,7 +807,9 @@ class Plugin:
     def _scan_and_process(self, settings, scheduled=False):
         return self._run_pipeline(
             CONTENT_TYPE_MOVIE, "movies", settings, scheduled,
-            self._clean_movie_titles, self._scan_movies, self._process_batch, self._generate_movie_strm,
+            self._clean_movie_titles, self._scan_movies,
+            lambda settings, progress: self._process_batch(CONTENT_TYPE_MOVIE, settings, progress),
+            self._generate_movie_strm,
         )
 
     # --- title cleanup (cosmetic, independent of selection) -----------------
@@ -947,7 +854,7 @@ class Plugin:
             if not dry_run:
                 # Keep the provider's original name so this is reversible —
                 # renaming is a real write to Dispatcharr's own data, not a
-                # plugin-local decision like probe results are.
+                # plugin-local decision.
                 props = obj.custom_properties or {}
                 props.setdefault("vod_manager_original_name", obj.name)
                 obj.custom_properties = props
@@ -994,14 +901,19 @@ class Plugin:
             "message": f"Scanned {scanned} movies, enqueued {enqueued} new/changed.",
         }
 
-    # --- process batch ------------------------------------------------------
+    # --- process ------------------------------------------------------------
+    #
+    # This plugin no longer measures anything. vod-probe writes each relation's
+    # quality, languages and bitrate into its custom_properties; a title is
+    # decided only once every one of its relations has an answer, so a relation
+    # nobody has looked at yet is never mistaken for a loser. A title that is
+    # not ready waits and is tried again at the next run.
 
     def _remember_failed_relations(self, content_type, content_id, relation_model, id_field):
         """Record the relation ids a title failed with. They are otherwise
         only recorded on success, so a title that always fails looked new on
-        every Scan, was queued again at the head of the next batch, failed
-        again and tripped the circuit breaker over and over. Scan now
-        requeues it only if its relations change."""
+        every Scan, was queued again at the head of the next batch and failed
+        again. Scan now requeues it only if its relations change."""
         try:
             current = set(
                 relation_model.objects.filter(
@@ -1016,168 +928,116 @@ class Plugin:
                 "Could not record the relations of failed %s %s: %s", content_type, content_id, exc
             )
 
-    def _process_batch(self, settings, on_progress=None):
-        from apps.vod.models import M3UMovieRelation
+    def _process_batch(self, content_type, settings, on_progress=None):
+        from apps.vod.models import M3UMovieRelation, M3USeriesRelation
 
-        acquired, held_since = self.store.try_acquire_lock("process_movie_batch")
+        is_movie = content_type == CONTENT_TYPE_MOVIE
+        lock = f"process_{content_type}_batch"
+        acquired, held_since = self.store.try_acquire_lock(lock)
         if not acquired:
-            return self._busy_lock_message("A movie batch", held_since)
+            return self._busy_lock_message("A movie batch" if is_movie else "A series batch", held_since)
         try:
-            if self.store.is_paused(CONTENT_TYPE_MOVIE):
-                return {"status": "ok", "message": "Queue is paused — resume it to process."}
+            if self.store.is_paused(content_type):
+                return {
+                    "status": "ok",
+                    "message": "Queue is paused — resume it to process." if is_movie
+                    else "Series queue is paused — resume it to process.",
+                }
 
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
             exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
             dry_run = bool(settings.get("dry_run", True))
-            batch_size = int(settings.get("batch_size", 25) or 25)
-            max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
-            max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
-            breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
+            batch_size = int(settings.get("batch_size", 25) or 25) if is_movie \
+                else int(settings.get("series_batch_size", 5) or 5)
 
-            movie_ids = self.store.claim_batch(CONTENT_TYPE_MOVIE, batch_size)
-            if not movie_ids:
-                return {"status": "ok", "message": "Nothing queued. Run Scan Movies first.", "queue_empty": True}
-
-            run_id = self.store.start_run(CONTENT_TYPE_MOVIE, dry_run)
-            limiter = _RateLimiter(max_per_second)
-            errors = 0
-            pruned_total = 0
-            processed = 0
-            breaker_tripped = False
-
-            with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
-                futures = {
-                    pool.submit(
-                        self._process_one_movie, mid, target_qualities, target_languages,
-                        exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter,
-                    ): mid
-                    for mid in movie_ids
+            content_ids = self.store.claim_batch(content_type, batch_size)
+            if not content_ids:
+                return {
+                    "status": "ok",
+                    "message": "Nothing queued. Run Scan Movies first." if is_movie
+                    else "Nothing queued. Run Scan Series first.",
+                    "queue_empty": True,
                 }
-                for future in as_completed(futures):
-                    movie_id = futures[future]
-                    if future.cancelled():
-                        self.store.release_claimed(CONTENT_TYPE_MOVIE, [movie_id])
-                        continue
-                    try:
-                        pruned = future.result()
-                        pruned_total += pruned
-                        self.store.mark_done(CONTENT_TYPE_MOVIE, movie_id)
-                    except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
-                        errors += 1
-                        self.store.mark_error(CONTENT_TYPE_MOVIE, movie_id, exc)
-                        self._remember_failed_relations(
-                            CONTENT_TYPE_MOVIE, movie_id, M3UMovieRelation, "movie_id"
-                        )
-                    processed += 1
-                    if on_progress:
-                        on_progress()
 
-                    if processed >= 5 and not breaker_tripped:
-                        if errors / processed > breaker_ratio:
-                            self.store.set_paused(CONTENT_TYPE_MOVIE, True)
-                            breaker_tripped = True
-                            # Titles no thread has started yet go back to the
-                            # queue rather than being worked through a failing
-                            # provider; only the ones in flight finish.
-                            for pending in futures:
-                                pending.cancel()
-
-            note = "circuit breaker tripped" if breaker_tripped else ""
-            self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
-
-            msg = (
-                f"Processed {processed} ({errors} errors), "
-                f"{'would prune' if dry_run else 'pruned'} {pruned_total} relations."
+            run_id = self.store.start_run(content_type, dry_run)
+            relation_model, id_field = (
+                (M3UMovieRelation, "movie_id") if is_movie else (M3USeriesRelation, "series_id")
             )
-            if breaker_tripped:
-                msg += " Error rate too high — queue auto-paused."
+            process_one = self._process_one_movie if is_movie else self._process_one_series
+            errors = pruned_total = processed = waiting = 0
+
+            for content_id in content_ids:
+                try:
+                    pruned_total += process_one(
+                        content_id, target_qualities, target_languages,
+                        exclude_unmatched_language, exclude_unmatched_quality, dry_run,
+                    )
+                    self.store.mark_done(content_type, content_id)
+                    processed += 1
+                except _WaitingForMeasurements:
+                    self.store.mark_waiting(content_type, content_id)
+                    waiting += 1
+                except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
+                    errors += 1
+                    processed += 1
+                    self.store.mark_error(content_type, content_id, exc)
+                    self._remember_failed_relations(content_type, content_id, relation_model, id_field)
+                if on_progress:
+                    on_progress()
+
+            note = f"{waiting} waiting for vod-probe" if waiting else ""
+            self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
+            unit = "" if is_movie else " series"
+            what = "relations" if is_movie else "episode relation(s)"
+            msg = (
+                f"Processed {processed}{unit} ({errors} errors), "
+                f"{'would prune' if dry_run else 'pruned'} {pruned_total} {what}."
+            )
+            if waiting:
+                msg += f" {waiting} waiting for vod-probe to measure them."
             return {
-                "status": "ok", "message": msg,
-                "processed": processed, "errors": errors, "pruned": pruned_total,
+                "status": "ok", "message": msg, "claimed": len(content_ids),
+                "processed": processed, "errors": errors, "pruned": pruned_total, "waiting": waiting,
             }
         finally:
-            self.store.release_lock("process_movie_batch")
+            self.store.release_lock(lock)
 
     def _process_one_movie(
-        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
+        self, movie_id, target_qualities, target_languages, exclude_unmatched_language,
+        exclude_unmatched_quality, dry_run,
     ):
-        """Retry wrapper around _process_one_movie_once: under load, a
-        worker thread's DB connection checkout can occasionally hit a
-        transient gevent scheduling error ("This operation would block
-        forever") unrelated to the stream itself — confirmed empirically by
-        immediately retrying failed titles and seeing them succeed. One
-        retry is enough; anything else (a genuinely dead stream, a real
-        bug) is not this class of error and should surface immediately."""
-        try:
-            return self._process_one_movie_once(
-                movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
-            )
-        except Exception as exc:
-            if "would block forever" not in str(exc):
-                raise
-            return self._process_one_movie_once(
-                movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
-            )
-        finally:
-            _release_db_connections()
-
-    def _process_one_movie_once(
-        self, movie_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality, dry_run, limiter
-    ):
-        """Probe every active relation for one movie, select winners, prune
-        losers (unless dry_run). Returns the number of relations pruned
-        (or that would be pruned, under dry_run)."""
+        """Select the winning relation(s) of one movie from vod-probe's
+        measurements and, unless dry_run, prune the losers. Returns the number
+        of relations pruned (or that would be)."""
         from apps.vod.models import M3UMovieRelation
-        from .probe import PROBE_SCHEMA_VERSION, probe_stream
+        from . import measurements
         from .selection import Candidate, select_winners
 
         relations = list(
-            M3UMovieRelation.objects.filter(
-                movie_id=movie_id, m3u_account__is_active=True
-            )
+            M3UMovieRelation.objects.filter(movie_id=movie_id, m3u_account__is_active=True)
         )
         if not relations:
             self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set())
             return 0
 
-        candidates = []
-        for relation in relations:
-            cached = self.store.get_probe(CONTENT_TYPE_MOVIE, relation.id)
-            stale = (
-                cached is None
-                or not cached.get("ok")
-                or cached.get("probe_version", 0) != PROBE_SCHEMA_VERSION
+        states = [measurements.state(r.custom_properties) for r in relations]
+        if measurements.MISSING in states:
+            raise _WaitingForMeasurements()
+        candidates = [
+            Candidate(
+                r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
+                bitrate=measurements.bitrate(r.custom_properties),
             )
-            if stale:
-                url = relation.get_stream_url()
-                if not url:
-                    continue
-                limiter.wait()
-                result = probe_stream(url)
-                self.store.save_probe(CONTENT_TYPE_MOVIE, relation.id, result)
-                cached = self.store.get_probe(CONTENT_TYPE_MOVIE, relation.id)
-            if not cached or not cached.get("ok"):
-                continue
-            import json as _json
-
-            candidates.append(
-                Candidate(
-                    relation.id,
-                    _json.loads(cached["audio_languages"] or "[]"),
-                    cached["quality_label"],
-                    bitrate=cached.get("video_bitrate"),
-                )
-            )
-
+            for r, state in zip(relations, states) if state == measurements.MEASURED
+        ]
         if not candidates:
-            # Every relation failed to probe: leave the catalogue untouched
-            # and let this title get retried on a future pass rather than
-            # guessing a winner with zero data.
-            raise RuntimeError(f"movie {movie_id}: no relation could be probed")
+            raise RuntimeError(f"movie {movie_id}: no relation could be measured")
 
-        winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality)
+        winners = select_winners(
+            candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality
+        )
         winner_ids = {c.relation_id for c in winners}
         all_ids = {r.id for r in relations}
         loser_ids = all_ids - winner_ids
@@ -1333,267 +1193,77 @@ class Plugin:
     def _scan_and_process_series(self, settings, scheduled=False):
         return self._run_pipeline(
             CONTENT_TYPE_SERIES, "series", settings, scheduled,
-            self._clean_series_titles, self._scan_series, self._process_series_batch, self._generate_series_strm,
+            self._clean_series_titles, self._scan_series,
+            lambda settings, progress: self._process_batch(CONTENT_TYPE_SERIES, settings, progress),
+            self._generate_series_strm,
         )
 
-    # --- series: process batch --------------------------------------------
-
-    def _process_series_batch(self, settings, on_progress=None):
-        from apps.vod.models import M3USeriesRelation
-
-        acquired, held_since = self.store.try_acquire_lock("process_series_batch")
-        if not acquired:
-            return self._busy_lock_message("A series batch", held_since)
-        try:
-            if self.store.is_paused(CONTENT_TYPE_SERIES):
-                return {"status": "ok", "message": "Series queue is paused — resume it to process."}
-
-            target_qualities = _parse_csv_list(settings.get("target_qualities"))
-            target_languages = _parse_csv_list(settings.get("target_languages"))
-            exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
-            exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
-            episode_sampling = settings.get("episode_sampling") or "first_only"
-            episode_sample_size = int(settings.get("episode_sample_size", 2) or 2)
-            dry_run = bool(settings.get("dry_run", True))
-            batch_size = int(settings.get("series_batch_size", 5) or 5)
-            max_concurrent = max(1, int(settings.get("max_concurrent_probes", 2) or 2))
-            max_per_second = float(settings.get("max_probes_per_second", 1) or 0)
-            breaker_ratio = float(settings.get("circuit_breaker_error_ratio", 0.5) or 0.5)
-
-            series_ids = self.store.claim_batch(CONTENT_TYPE_SERIES, batch_size)
-            if not series_ids:
-                return {"status": "ok", "message": "Nothing queued. Run Scan Series first.", "queue_empty": True}
-
-            run_id = self.store.start_run(CONTENT_TYPE_SERIES, dry_run)
-            limiter = _RateLimiter(max_per_second)
-            errors = 0
-            pruned_total = 0
-            processed = 0
-            breaker_tripped = False
-
-            with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
-                futures = {
-                    pool.submit(
-                        self._process_one_series, sid, target_qualities, target_languages,
-                        exclude_unmatched_language, exclude_unmatched_quality, episode_sampling, episode_sample_size, dry_run, limiter,
-                    ): sid
-                    for sid in series_ids
-                }
-                for future in as_completed(futures):
-                    series_id = futures[future]
-                    if future.cancelled():
-                        self.store.release_claimed(CONTENT_TYPE_SERIES, [series_id])
-                        continue
-                    try:
-                        pruned = future.result()
-                        pruned_total += pruned
-                        self.store.mark_done(CONTENT_TYPE_SERIES, series_id)
-                    except Exception as exc:  # noqa: BLE001 - surfaced via mark_error
-                        errors += 1
-                        self.store.mark_error(CONTENT_TYPE_SERIES, series_id, exc)
-                        self._remember_failed_relations(
-                            CONTENT_TYPE_SERIES, series_id, M3USeriesRelation, "series_id"
-                        )
-                    processed += 1
-                    if on_progress:
-                        on_progress()
-
-                    if processed >= 5 and not breaker_tripped:
-                        if errors / processed > breaker_ratio:
-                            self.store.set_paused(CONTENT_TYPE_SERIES, True)
-                            breaker_tripped = True
-                            # Titles no thread has started yet go back to the
-                            # queue rather than being worked through a failing
-                            # provider; only the ones in flight finish.
-                            for pending in futures:
-                                pending.cancel()
-
-            note = "circuit breaker tripped" if breaker_tripped else ""
-            self.store.finish_run(run_id, processed, errors, pruned_total, note=note)
-
-            msg = (
-                f"Processed {processed} series ({errors} errors), "
-                f"{'would prune' if dry_run else 'pruned'} {pruned_total} episode relation(s)."
-            )
-            if breaker_tripped:
-                msg += " Error rate too high — queue auto-paused."
-            return {
-                "status": "ok", "message": msg,
-                "processed": processed, "errors": errors, "pruned": pruned_total,
-            }
-        finally:
-            self.store.release_lock("process_series_batch")
+    # --- series: process ---------------------------------------------------
 
     def _process_one_series(
-        self, series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
-        episode_sampling, episode_sample_size, dry_run, limiter,
+        self, series_id, target_qualities, target_languages, exclude_unmatched_language,
+        exclude_unmatched_quality, dry_run,
     ):
-        """Retry wrapper — see _process_one_movie for why: a worker
-        thread's DB connection checkout can occasionally hit a transient
-        gevent scheduling error unrelated to the series itself."""
-        try:
-            return self._process_one_series_once(
-                series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
-                episode_sampling, episode_sample_size, dry_run, limiter,
-            )
-        except Exception as exc:
-            if "would block forever" not in str(exc):
-                raise
-            return self._process_one_series_once(
-                series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
-                episode_sampling, episode_sample_size, dry_run, limiter,
-            )
-        finally:
-            _release_db_connections()
-
-    def _process_one_series_once(
-        self, series_id, target_qualities, target_languages, exclude_unmatched_language, exclude_unmatched_quality,
-        episode_sampling, episode_sample_size, dry_run, limiter,
-    ):
-        """For one series: ensure every active source's episode list is
-        loaded, then probe + select + (unless dry_run) prune per episode.
-        Returns the number of episode relations pruned (or that would be)."""
-        from apps.vod.models import Series, M3USeriesRelation, Episode, M3UEpisodeRelation
-        from apps.vod.tasks import refresh_series_episodes
-        from .probe import PROBE_SCHEMA_VERSION, probe_stream
+        """Select the winning relation(s) of every episode of one series from
+        vod-probe's measurements and, unless dry_run, prune the losers. The
+        whole series is checked before anything is deleted: an episode nobody
+        has measured yet (or whose result Dispatcharr erased by reloading the
+        series) makes the series wait. Returns the number of episode
+        relations pruned (or that would be)."""
+        from apps.vod.models import M3USeriesRelation, M3UEpisodeRelation
+        from . import measurements
         from .selection import Candidate, select_winners
 
-        series = Series.objects.get(id=series_id)
         series_relations = list(
-            M3USeriesRelation.objects.filter(series=series, m3u_account__is_active=True)
+            M3USeriesRelation.objects.filter(series_id=series_id, m3u_account__is_active=True)
         )
         if not series_relations:
             self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set())
             return 0
+        if not all(measurements.series_ready(r.custom_properties) for r in series_relations):
+            raise _WaitingForMeasurements()
 
-        for relation in series_relations:
-            if not (relation.custom_properties or {}).get("episodes_fetched"):
-                limiter.wait()
-                refresh_series_episodes(
-                    relation.m3u_account, series, relation.external_series_id
+        by_episode = {}
+        for relation in M3UEpisodeRelation.objects.filter(
+            episode__series_id=series_id, m3u_account__is_active=True
+        ):
+            by_episode.setdefault(relation.episode_id, []).append(relation)
+        if not by_episode:
+            raise _WaitingForMeasurements()
+
+        decisions, without_candidates = [], 0
+        for ep_relations in by_episode.values():
+            states = [measurements.state(r.custom_properties) for r in ep_relations]
+            if measurements.MISSING in states:
+                raise _WaitingForMeasurements()
+            candidates = [
+                Candidate(
+                    r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
+                    bitrate=measurements.bitrate(r.custom_properties),
                 )
-
-        episodes = list(
-            Episode.objects.filter(series=series).order_by("season_number", "episode_number")
-        )
-
-        pruned_total = 0
-        episodes_with_no_candidates = 0
-        # Episode sampling, keyed per (season, m3u_account): probe the first
-        # `sample_target_n` episodes for real; if they all agree on quality
-        # and audio languages, the first one becomes that combination's
-        # confirmed representative and every later episode in the same
-        # season/account reuses its result instead of a fresh ffprobe call.
-        # If they disagree, the season is treated as inconsistently encoded
-        # and every remaining episode is probed for real instead of risking
-        # an extrapolation that's just as likely to be wrong as right.
-        # sample_target_n=None ("all") never establishes a representative.
-        sample_target_n = {
-            "first_only": 1,
-            "all": None,
-        }.get(episode_sampling)
-        if episode_sampling == "sample_n":
-            sample_target_n = max(1, int(episode_sample_size or 2))
-        season_state = {}
-
-        for episode in episodes:
-            ep_relations = list(
-                M3UEpisodeRelation.objects.filter(
-                    episode=episode, m3u_account__is_active=True
-                )
-            )
-            if not ep_relations:
-                continue
-
-            candidates = []
-            for ep_relation in ep_relations:
-                cached = self.store.get_probe(CONTENT_TYPE_EPISODE, ep_relation.id)
-                stale = (
-                    cached is None
-                    or not cached.get("ok")
-                    or cached.get("probe_version", 0) != PROBE_SCHEMA_VERSION
-                )
-                if stale:
-                    import json as _json
-
-                    sample_key = (episode.season_number, ep_relation.m3u_account_id)
-                    state = season_state.setdefault(
-                        sample_key,
-                        {"probes": [], "reference": None, "consistent": True, "representative": None},
-                    )
-
-                    if state["representative"] is not None:
-                        source_probe = self.store.get_probe(CONTENT_TYPE_EPISODE, state["representative"])
-                        if source_probe and source_probe.get("ok"):
-                            self.store.save_probe(
-                                CONTENT_TYPE_EPISODE, ep_relation.id, source_probe,
-                                sampled_from_relation_id=state["representative"],
-                            )
-                            cached = self.store.get_probe(CONTENT_TYPE_EPISODE, ep_relation.id)
-                            stale = False
-
-                    if stale:
-                        url = ep_relation.get_stream_url()
-                        if not url:
-                            continue
-                        limiter.wait()
-                        result = probe_stream(url)
-                        self.store.save_probe(CONTENT_TYPE_EPISODE, ep_relation.id, result)
-                        cached = self.store.get_probe(CONTENT_TYPE_EPISODE, ep_relation.id)
-                        if cached and cached.get("ok"):
-                            state["probes"].append(ep_relation.id)
-                            signature = (
-                                cached["quality_label"],
-                                tuple(sorted(_json.loads(cached["audio_languages"] or "[]"))),
-                            )
-                            if state["reference"] is None:
-                                state["reference"] = signature
-                            elif signature != state["reference"]:
-                                state["consistent"] = False
-                            if (
-                                sample_target_n is not None
-                                and state["consistent"]
-                                and len(state["probes"]) >= sample_target_n
-                            ):
-                                state["representative"] = state["probes"][0]
-                if not cached or not cached.get("ok"):
-                    continue
-                import json as _json
-
-                candidates.append(
-                    Candidate(
-                        ep_relation.id,
-                        _json.loads(cached["audio_languages"] or "[]"),
-                        cached["quality_label"],
-                        bitrate=cached.get("video_bitrate"),
-                    )
-                )
-
+                for r, state in zip(ep_relations, states) if state == measurements.MEASURED
+            ]
             if not candidates:
-                episodes_with_no_candidates += 1
+                without_candidates += 1
                 continue
-
-            winners = select_winners(candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality)
+            winners = select_winners(
+                candidates, target_languages, target_qualities,
+                exclude_unmatched_language, exclude_unmatched_quality,
+            )
             winner_ids = {c.relation_id for c in winners}
-            all_ids = {r.id for r in ep_relations}
-            loser_ids = all_ids - winner_ids
+            decisions.append({r.id for r in ep_relations} - winner_ids)
 
-            if dry_run:
-                pruned_total += len(loser_ids)
-                continue
+        if without_candidates == len(by_episode):
+            raise RuntimeError(f"series {series_id}: no episode relation could be measured")
 
-            if loser_ids:
-                M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete()
-            pruned_total += len(loser_ids)
-
-        if episodes and episodes_with_no_candidates == len(episodes):
-            raise RuntimeError(f"series {series_id}: no episode relation could be probed")
+        loser_ids = set().union(*decisions) if decisions else set()
+        if loser_ids and not dry_run:
+            M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete()
 
         self.store.set_known_relation_ids(
-            CONTENT_TYPE_SERIES, series_id,
-            {r.id for r in series_relations},
+            CONTENT_TYPE_SERIES, series_id, {r.id for r in series_relations}
         )
-        return pruned_total
+        return len(loser_ids)
 
     # --- status ---------------------------------------------------------
 
@@ -1608,7 +1278,7 @@ class Plugin:
             f"[RUNNING, last activity {int(time.time() - running_since)}s ago] " if running_since else ""
         )
         msg = (
-            f"{running}pending={counts['pending']} in_progress={counts['in_progress']} "
+            f"{running}pending={counts['pending']} in_progress={counts['in_progress']} waiting={counts['waiting']} "
             f"done={counts['done']} error={counts['error']}"
             f"{' [PAUSED]' if paused else ''}"
         )
@@ -1630,22 +1300,26 @@ class Plugin:
         or automatically at the end of Scan + Process), so composition can
         be compared over time rather than only seen as a one-off report."""
         from apps.vod.models import M3UMovieRelation, M3UEpisodeRelation
+        from . import measurements
 
-        movie_relation_ids = list(
-            M3UMovieRelation.objects.filter(m3u_account__is_active=True)
-            .values_list("id", "movie_id")
+        movie_rows = list(
+            M3UMovieRelation.objects.filter(m3u_account__is_active=True).values_list(
+                "id", "movie_id", "custom_properties__probe__status", "custom_properties__probe__tier"
+            )
         )
-        episode_relation_ids = list(
-            M3UEpisodeRelation.objects.filter(m3u_account__is_active=True)
-            .values_list("id", "episode__series_id")
+        episode_rows = list(
+            M3UEpisodeRelation.objects.filter(m3u_account__is_active=True).values_list(
+                "id", "episode__series_id", "custom_properties__probe__status", "custom_properties__probe__tier"
+            )
         )
-
-        movie_quality_by_relation = self.store.get_quality_labels(
-            CONTENT_TYPE_MOVIE, [rid for rid, _ in movie_relation_ids]
-        )
-        episode_quality_by_relation = self.store.get_quality_labels(
-            CONTENT_TYPE_EPISODE, [rid for rid, _ in episode_relation_ids]
-        )
+        movie_relation_ids = [(rid, title_id) for rid, title_id, _, _ in movie_rows]
+        episode_relation_ids = [(rid, title_id) for rid, title_id, _, _ in episode_rows]
+        movie_quality_by_relation = {
+            rid: measurements.usable_tier(status, tier) for rid, _, status, tier in movie_rows
+        }
+        episode_quality_by_relation = {
+            rid: measurements.usable_tier(status, tier) for rid, _, status, tier in episode_rows
+        }
 
         def _aggregate(pairs, quality_by_relation):
             # quality_label -> {"titles": set(title_id), "relations": count}
@@ -1702,6 +1376,7 @@ class Plugin:
             return self._busy_lock_message("Movie .strm generation", held_since)
         try:
             from apps.vod.models import M3UMovieRelation
+            from . import measurements
             from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             blocker = self._generate_blocker(CONTENT_TYPE_MOVIE, settings)
@@ -1719,7 +1394,7 @@ class Plugin:
                 .select_related("movie")
                 .order_by("movie_id", "id")
             )
-            quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_MOVIE, [r.id for r in relations])
+            quality_by_relation = {r.id: measurements.tier(r.custom_properties) for r in relations}
 
             by_movie = {}
             for rel in relations:
@@ -1788,6 +1463,7 @@ class Plugin:
         try:
             from apps.vod.models import M3UEpisodeRelation
 
+            from . import measurements
             from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             blocker = self._generate_blocker(CONTENT_TYPE_SERIES, settings)
@@ -1805,7 +1481,7 @@ class Plugin:
                 .select_related("episode", "episode__series")
                 .order_by("episode_id", "id")
             )
-            quality_by_relation = self.store.get_quality_labels(CONTENT_TYPE_EPISODE, [r.id for r in relations])
+            quality_by_relation = {r.id: measurements.tier(r.custom_properties) for r in relations}
 
             by_episode = {}
             for rel in relations:
@@ -1909,11 +1585,10 @@ class Plugin:
         longer has. Dispatcharr's cleanup removes relations, and the movies
         and series left with none, when a provider group is disabled or a
         catalogue is re-imported — but nothing removes the queue, known-
-        relations and probe-cache rows keyed on the deleted ids, so they pile
-        up. A content type Dispatcharr holds none of is skipped: an empty
+        relations rows keyed on the deleted ids, so they pile up. A content type Dispatcharr holds none of is skipped: an empty
         table is more likely a re-import in progress than a real wipe, and
         every stored row would look orphaned."""
-        from apps.vod.models import Movie, M3UMovieRelation, M3UEpisodeRelation, Series
+        from apps.vod.models import Movie, Series
 
         in_progress = sum(
             self.store.queue_counts(t)["in_progress"] for t in (CONTENT_TYPE_MOVIE, CONTENT_TYPE_SERIES)
@@ -1929,10 +1604,6 @@ class Plugin:
             ("movies", CONTENT_TYPE_MOVIE, Movie),
             ("series", CONTENT_TYPE_SERIES, Series),
         )
-        probe_sets = (
-            ("movie probes", CONTENT_TYPE_MOVIE, M3UMovieRelation),
-            ("episode probes", CONTENT_TYPE_EPISODE, M3UEpisodeRelation),
-        )
         parts, skipped = [], []
 
         for label, content_type, model in title_sets:
@@ -1946,18 +1617,6 @@ class Plugin:
                 queue, known = self.store.delete_content_rows(content_type, dead)
                 parts.append(f"{len(dead)} {label} ({queue} queue + {known} known-relations rows)")
             elif dead:
-                parts.append(f"{len(dead)} {label}")
-
-        for label, content_type, model in probe_sets:
-            live = set(model.objects.values_list("id", flat=True))
-            stored = self.store.stored_probe_ids(content_type)
-            if stored and not live:
-                skipped.append(label)
-                continue
-            dead = stored - live
-            if dead and not dry_run:
-                self.store.delete_probe_rows(content_type, dead)
-            if dead:
                 parts.append(f"{len(dead)} {label}")
 
         verb = "Would remove" if dry_run else "Removed"
@@ -1980,7 +1639,7 @@ class Plugin:
         }
 
     def _reset_plugin_state(self, settings):
-        """Wipes this plugin's own sidecar state (probe cache, queues, known
+        """Wipes this plugin's own sidecar state (queues, known
         relation sets, pause flags, run history, catalog stats, .strm
         tracking) so the next Scan/Process starts completely from scratch.
         Never touches Dispatcharr's own database or any real .strm file —
@@ -1989,63 +1648,11 @@ class Plugin:
         return {
             "status": "ok",
             "message": (
-                "Plugin state reset: probe cache, queues, known relations, "
+                "Plugin state reset: queues, known relations, "
                 "run history, catalog stats and .strm tracking all cleared. "
                 "Dispatcharr's own catalogue is untouched."
             ),
         }
-
-    def _reprobe_by_stream_id(self, settings):
-        """Targeted fix for a provider silently swapping the file behind a
-        stream_id after this plugin already probed and classified it (a
-        real incident, not theoretical): clears just that one relation's
-        cached probe and re-queues its movie/series, without touching anything
-        else in the catalogue. Does not itself re-probe — Scan + Process
-        does that on the next run, same as any other
-        queued title."""
-        from apps.vod.models import M3UMovieRelation, M3UEpisodeRelation
-
-        stream_id = (settings.get("reprobe_stream_id") or "").strip()
-        if not stream_id:
-            return {
-                "status": "error",
-                "message": "Set 'Stream ID to force re-probe' first — copy it from a .strm file's URL (?stream_id=...).",
-            }
-
-        movie_rel = (
-            M3UMovieRelation.objects.filter(stream_id=stream_id, m3u_account__is_active=True)
-            .select_related("movie")
-            .first()
-        )
-        if movie_rel:
-            self.store.delete_probe(CONTENT_TYPE_MOVIE, movie_rel.id)
-            self.store.requeue(CONTENT_TYPE_MOVIE, movie_rel.movie_id)
-            return {
-                "status": "ok",
-                "message": (
-                    f"Cleared cached probe for '{movie_rel.movie.name}' and re-queued it — "
-                    "run Scan + Process to re-probe."
-                ),
-            }
-
-        episode_rel = (
-            M3UEpisodeRelation.objects.filter(stream_id=stream_id, m3u_account__is_active=True)
-            .select_related("episode", "episode__series")
-            .first()
-        )
-        if episode_rel:
-            self.store.delete_probe(CONTENT_TYPE_EPISODE, episode_rel.id)
-            self.store.requeue(CONTENT_TYPE_SERIES, episode_rel.episode.series_id)
-            return {
-                "status": "ok",
-                "message": (
-                    f"Cleared cached probe for one relation of '{episode_rel.episode.series.name}' "
-                    "and re-queued the series — run Scan + Process to re-probe (other "
-                    "episodes keep using their own existing cache)."
-                ),
-            }
-
-        return {"status": "error", "message": f"No active relation found with stream_id={stream_id!r}."}
 
     # --- scheduling (django-celery-beat) --------------------------------
     #

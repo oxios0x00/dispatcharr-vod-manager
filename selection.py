@@ -24,9 +24,9 @@ _QUALITY_LADDER = ["2160p", "1080p", "720p", "480p", "sd", "unknown"]
 
 
 class Candidate:
-    """A single M3UMovieRelation (or episode relation) plus its probe
-    result, in the shape selection() needs. Callers build these from
-    Store.get_probe() rows."""
+    """A single M3UMovieRelation (or episode relation) plus its measured
+    quality, in the shape selection() needs. Callers build these from
+    measurements.py."""
 
     __slots__ = ("relation_id", "languages", "quality_label", "bitrate")
 

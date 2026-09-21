@@ -19,7 +19,7 @@ def with_store(fn):
 def test_enqueue_then_claim_then_done():
     def run(s):
         s.enqueue("movie", 1)
-        assert s.queue_counts("movie") == {"pending": 1, "in_progress": 0, "done": 0, "error": 0}
+        assert s.queue_counts("movie") == {"pending": 1, "in_progress": 0, "waiting": 0, "done": 0, "error": 0}
         claimed = s.claim_batch("movie", 10)
         assert claimed == [1]
         s.mark_done("movie", 1)
@@ -97,20 +97,6 @@ def test_changed_content_ids_flags_new_and_different_relation_sets():
     with_store(run)
 
 
-def test_release_claimed_puts_unstarted_titles_back_in_the_queue():
-    def run(s):
-        for cid in (1, 2, 3):
-            s.enqueue("movie", cid)
-        assert sorted(s.claim_batch("movie", 3)) == [1, 2, 3]
-        s.mark_done("movie", 1)
-        s.release_claimed("movie", [1, 2])
-        counts = s.queue_counts("movie")
-        # 1 stays done (only in-progress rows are released), 3 was not released.
-        assert counts["done"] == 1 and counts["pending"] == 1 and counts["in_progress"] == 1
-
-    with_store(run)
-
-
 def test_requeue_errors_only_touches_errored_titles_of_that_type():
     def run(s):
         for cid in (1, 2, 3):
@@ -125,88 +111,6 @@ def test_requeue_errors_only_touches_errored_titles_of_that_type():
         counts = s.queue_counts("movie")
         assert counts["pending"] == 1 and counts["done"] == 1 and counts["in_progress"] == 1
         assert s.queue_counts("series")["error"] == 1
-
-    with_store(run)
-
-
-def test_migrated_old_rows_default_probe_version_to_zero():
-    # An old row saved before probe_version existed must read back as 0
-    # (older than any real PROBE_SCHEMA_VERSION), so the "stale cache,
-    # re-probe" check in plugin.py correctly treats it as needing a
-    # re-probe rather than silently reusing pre-migration data forever.
-    # This also predates content_type (pre-series-support schema) — the
-    # migration must tag it 'movie', the only type that ever existed then.
-    import sqlite3
-
-    tmp = tempfile.mkdtemp()
-    try:
-        old_db = os.path.join(tmp, "state.sqlite3")
-        conn = sqlite3.connect(old_db)
-        conn.execute(
-            """CREATE TABLE relation_probes (
-                relation_id INTEGER PRIMARY KEY, probed_at REAL, ok INTEGER, error TEXT,
-                width INTEGER, height INTEGER, quality_label TEXT, video_codec TEXT,
-                hdr_type TEXT, audio_languages TEXT, audio_description_languages TEXT,
-                subtitle_languages TEXT, duration_secs REAL, raw_json TEXT)"""
-        )
-        conn.execute(
-            "INSERT INTO relation_probes (relation_id, probed_at, ok, quality_label) VALUES (1, 0, 1, '1080p')"
-        )
-        conn.commit()
-        conn.close()
-
-        s = Store(tmp)
-        row = s.get_probe("movie", 1)
-        assert row["probe_version"] == 0
-        assert row["video_bitrate"] is None
-        assert row["content_type"] == "movie"
-    finally:
-        shutil.rmtree(tmp)
-
-
-def test_relation_probes_do_not_collide_across_content_types():
-    # M3UMovieRelation and M3UEpisodeRelation are separate Django tables
-    # with independent autoincrement ids — a movie relation and an episode
-    # relation can share the same numeric id. The cache must not conflate
-    # them (the bug the content_type composite key exists to prevent).
-    def run(s):
-        s.save_probe("movie", 42, {"ok": True, "quality_label": "1080p"})
-        s.save_probe("episode", 42, {"ok": True, "quality_label": "720p"})
-
-        movie_row = s.get_probe("movie", 42)
-        episode_row = s.get_probe("episode", 42)
-        assert movie_row["quality_label"] == "1080p"
-        assert episode_row["quality_label"] == "720p"
-
-    with_store(run)
-
-
-def test_save_probe_records_sampled_from_relation_id():
-    # Episode sampling copies one real probe's result onto sibling episode
-    # relations in the same season/source — this field keeps that
-    # extrapolation auditable rather than indistinguishable from a real probe.
-    def run(s):
-        s.save_probe("episode", 100, {"ok": True, "quality_label": "1080p"})
-        s.save_probe(
-            "episode", 101, {"ok": True, "quality_label": "1080p"},
-            sampled_from_relation_id=100,
-        )
-
-        assert s.get_probe("episode", 100)["sampled_from_relation_id"] is None
-        assert s.get_probe("episode", 101)["sampled_from_relation_id"] == 100
-
-    with_store(run)
-
-
-def test_get_quality_labels_bulk_lookup():
-    def run(s):
-        s.save_probe("episode", 1, {"ok": True, "quality_label": "2160p"})
-        s.save_probe("episode", 2, {"ok": True, "quality_label": "1080p"})
-        s.save_probe("episode", 3, {"ok": False, "quality_label": "720p"})  # not ok, excluded
-
-        labels = s.get_quality_labels("episode", [1, 2, 3, 4])
-        assert labels == {1: "2160p", 2: "1080p"}
-        assert s.get_quality_labels("episode", []) == {}
 
     with_store(run)
 
@@ -283,32 +187,10 @@ def test_strm_manifest_is_independent_per_content_type():
     with_store(run)
 
 
-def test_delete_probe_removes_only_the_targeted_relation():
-    def run(s):
-        s.save_probe("movie", 10, {"ok": True, "quality_label": "1080p"})
-        s.save_probe("movie", 11, {"ok": True, "quality_label": "2160p"})
-
-        s.delete_probe("movie", 10)
-
-        assert s.get_probe("movie", 10) is None
-        assert s.get_probe("movie", 11) is not None
-
-    with_store(run)
-
-
-def test_delete_probe_is_a_noop_when_nothing_cached():
-    def run(s):
-        s.delete_probe("movie", 999)  # must not raise
-        assert s.get_probe("movie", 999) is None
-
-    with_store(run)
-
-
 def test_reset_all_clears_every_table():
     def run(s):
         s.enqueue("movie", 1)
         s.set_known_relation_ids("movie", 1, {10, 11})
-        s.save_probe("movie", 10, {"ok": True, "quality_label": "1080p"})
         s.set_paused("movie", True)
         s.start_run("movie", dry_run=True)
         s.save_catalog_stats_snapshot([
@@ -318,9 +200,8 @@ def test_reset_all_clears_every_table():
 
         s.reset_all()
 
-        assert s.queue_counts("movie") == {"pending": 0, "in_progress": 0, "done": 0, "error": 0}
+        assert s.queue_counts("movie") == {"pending": 0, "in_progress": 0, "waiting": 0, "done": 0, "error": 0}
         assert s.get_known_relation_ids("movie", 1) is None
-        assert s.get_probe("movie", 10) is None
         assert s.is_paused("movie") is False
         assert s.get_latest_catalog_stats() == (None, [])
         assert s.get_strm_manifest("movie") == set()
@@ -395,10 +276,6 @@ def _seed_orphan_fixture(s):
         for cid in ids:
             s.enqueue(content_type, cid)
             s.set_known_relation_ids(content_type, cid, {cid * 100})
-    for rid in (100, 101, 102):
-        s.save_probe("movie", rid, {"ok": True, "quality_label": "1080p"})
-    for rid in (100, 555):
-        s.save_probe("episode", rid, {"ok": True, "quality_label": "720p"})
 
 
 def test_stored_content_ids_covers_queue_and_known_relations():
@@ -418,17 +295,6 @@ def test_delete_content_rows_removes_only_the_given_titles_of_that_type():
         assert (queue, known) == (2, 2)
         assert s.stored_content_ids("movie") == {1}
         assert s.stored_content_ids("series") == {10, 11}  # same ids under another type untouched
-
-    with_store(run)
-
-
-def test_delete_probe_rows_is_scoped_to_content_type_and_ids():
-    def run(s):
-        _seed_orphan_fixture(s)
-        assert s.stored_probe_ids("movie") == {100, 101, 102}
-        assert s.delete_probe_rows("movie", {101, 102}) == 2
-        assert s.stored_probe_ids("movie") == {100}
-        assert s.stored_probe_ids("episode") == {100, 555}  # episode 100 is not movie 100
 
     with_store(run)
 
@@ -456,3 +322,22 @@ if __name__ == "__main__":
             print(f"FAIL {t.__name__}: {e}")
     print(f"\n{len(tests) - failures}/{len(tests)} passed")
     sys.exit(1 if failures else 0)
+
+
+def test_a_waiting_title_leaves_the_queue_until_it_is_requeued():
+    def run(s):
+        for cid in (1, 2):
+            s.enqueue("movie", cid)
+        s.enqueue("series", 9)
+        s.claim_batch("movie", 2)
+        s.mark_waiting("movie", 1)
+        s.mark_done("movie", 2)
+        counts = s.queue_counts("movie")
+        assert counts["waiting"] == 1 and counts["pending"] == 0 and counts["in_progress"] == 0
+        # Nothing is left to claim while it waits.
+        assert s.claim_batch("movie", 10) == []
+        assert s.requeue_waiting("movie") == 1
+        assert s.queue_counts("movie")["pending"] == 1
+        assert s.queue_counts("series")["pending"] == 1
+
+    with_store(run)
