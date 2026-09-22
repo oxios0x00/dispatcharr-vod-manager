@@ -16,7 +16,7 @@ Exercised against a real Dispatcharr test instance, not just unit-tested: vod-pr
 
 ## Install
 
-1. Clone or download this repo into Dispatcharr's plugins directory (`/data/plugins` by default, overridable with the `DISPATCHARR_PLUGINS_DIR` env var). The folder name becomes the plugin key, e.g. `/data/plugins/vod_manager/`.
+1. Download `vod_manager.zip` from the [latest release](../../releases/latest) and extract it into Dispatcharr's plugins directory (`/data/plugins` by default, overridable with the `DISPATCHARR_PLUGINS_DIR` env var) — it extracts as `vod_manager/`, the folder name Dispatcharr uses as the plugin key. Cloning the repo works too, but pulls in tests, docs and CI config the plugin doesn't need at runtime.
 2. In Dispatcharr → Plugins, enable **VOD Manager**.
 3. Install and enable **vod-probe** as well, and let it measure your catalogue first. VOD Manager does not run `ffprobe` itself: it decides from the quality, languages and bitrate that vod-probe writes into each relation. A title whose relations vod-probe has not measured yet waits for the next run.
 
