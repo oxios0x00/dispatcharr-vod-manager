@@ -33,7 +33,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 
 | Setting | Default | What it does |
 |---|---|---|
-| Tags to strip | a list of common provider prefixes | One literal prefix per line, matched case-insensitively at the start of a title (`NF -`, `4K-AMZ -`, ...). Cosmetic only. Titles with no TMDB/IMDB id are skipped, since renaming them would make Dispatcharr's own matching create a duplicate. |
+| Tags to strip | a list of common provider prefixes | One literal prefix per line, matched case-insensitively at the start of a title (`NF -`, `4K-AMZ -`, ...); the longest matching prefix wins and stacked tags are stripped repeatedly (up to 5 passes). Cosmetic only. Titles with no TMDB/IMDB id are skipped, since renaming them would make Dispatcharr's own matching create a duplicate. |
 | Run title cleanup automatically with Scan + Process | OFF | Otherwise only the Clean Titles buttons run it. |
 
 ## `.strm` output
@@ -43,9 +43,9 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 | Dispatcharr base URL | empty | Baked into every `.strm`; must be reachable from your media server. |
 | Library root path | `/data/strm` | Where files are written, inside the container. |
 | Movies / Series subfolder | `movies` / `series` | Folder names under the root. |
-| Run .strm generation automatically with Scan + Process | OFF | Only affects the scheduled Scan + Process, never a manual click. |
-| Include `[tmdbid-…]` in the folder name | OFF | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions (episode grouping works differently, see [Limitations](limitations.md)). Turning it on renames every tagged folder, and every file inside it, at the next Generate. |
-| Skip titles with no TMDB/IMDB id | OFF | No `.strm` at all for those titles (and an existing one is removed). |
+| Run .strm generation automatically with Scan + Process | OFF | Only affects the scheduled (cron) Scan + Process, never a manual Run click — a manual run can follow a fresh provider scan still being matched by Dispatcharr, and generating mid-match could write files for entries that are still incomplete. |
+| Include `[tmdbid-…]` in the folder name | ON | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions (episode grouping works differently, see [Limitations](limitations.md)). Flipping it either way renames every tagged folder, and every file inside it, at the next Generate. |
+| Skip titles with no TMDB/IMDB id | ON | No `.strm` at all for those titles (and an existing one is removed) — some providers never expose an id for certain content, confirmed happening for entire series catalogues on at least one provider, and a media server has nothing reliable to identify the file by regardless of the title text. OFF: it still gets a `.strm`, named from the raw provider title text. |
 
 ## Schedule
 
@@ -54,7 +54,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 ## Actions
 
 - **[MOVIES] / [SERIES]**: Scan + Process (background run), Scan, Queue Status, Stop, Clean Titles, Generate .strm Files.
-- **[MAINTENANCE]**: Catalog Stats (quality and language composition), Retry Errored Titles (puts titles that failed back in the queue; a failed title is otherwise retried only when its relations change), Delete .strm Files, Prune Orphaned State (deletes the plugin's own queue and known-relation rows for titles Dispatcharr has deleted; honours Dry Run, and never touches Dispatcharr's data or `.strm` files), Reset Plugin State (wipes the queues and history — the next scan starts from scratch; never touches Dispatcharr's own data).
-- **[SCHEDULE]**: Apply, Remove, Status, Test Fire Now.
+- **[MAINTENANCE]**: Catalog Stats (quality and language composition), Retry Errored Titles (puts titles that failed back in the queue; a failed title is otherwise retried only when its relations change), Delete .strm Files, Prune Orphaned State (deletes the plugin's own queue and known-relation rows for titles Dispatcharr has deleted; honours Dry Run, refuses while a batch is running, skips a content type with nothing queued, and never touches Dispatcharr's data or `.strm` files), Reset Plugin State (wipes the queues and history — the next scan starts from scratch; never touches Dispatcharr's own data).
+- **[SCHEDULE]**: Apply, Remove, Status.
 
 Scan + Process and both Generate actions refuse to start while an earlier run of the same action is still going.

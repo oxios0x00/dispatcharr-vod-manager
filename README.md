@@ -1,10 +1,18 @@
 # VOD Manager
 
-Curates Dispatcharr's VOD catalogue automatically, for movies and series alike: reads what the companion plugin **vod-probe** measured for every relation (source) behind a duplicated title, and keeps the ones that match your target quality and language settings — by default every matching version, or one winner per tier if you turn on more aggressive cleanup — deleting the rest from Dispatcharr's own database. Cleanup is optional: leave the quality and language settings empty to keep everything, or turn off Dry run only once you trust the picks. Optionally writes pinned `.strm` files so Emby/Jellyfin can show real, distinct multi-version playback for a single title.
+Curates Dispatcharr's VOD catalogue for movies and series: reads the companion plugin **vod-probe**'s per-relation quality/language/bitrate measurements, decides which version(s) of each title to keep, and prunes the rest from Dispatcharr's own database.
+
+- **Selection** — keep every version matching your quality/language settings (default), or just the single best per quality tier.
+- **Exclusions** — permanently exclude specific titles by TMDB id, regardless of the settings above.
+- **Title cleanup** — optionally strips junk provider prefixes from titles (cosmetic only, never affects selection).
+- **`.strm` generation** — optionally writes one file per kept relation, pinned directly to it, so Emby/Jellyfin can show true multi-version playback (Dispatcharr's own API only ever serves one version per title to a player).
+- **Scheduling** — optionally runs one action on its own cron, independent of Dispatcharr's own refresh.
+
+Everything defaults to the safe choice: Dry run is ON, cleanup keeps every matching version, and nothing is scheduled until you set it up. See [Settings and actions](docs/settings.md) for every option, or [Concepts](docs/concepts.md) for how it all fits together.
 
 ## Status
 
-Validated end to end against a real Dispatcharr instance, dry-run and live: probing, quality-tier selection with bitrate tie-break, relation pruning, title cleanup, scheduling, and `.strm` generation have all been exercised for real on a live catalogue, not just unit-tested.
+Exercised against a real Dispatcharr test instance, not just unit-tested: vod-probe-driven selection, per-title exclusion, and `.strm` generation (including the Jellyfin-compatible naming) have all been run for real, dry-run and with actual file writes. Live (destructive) pruning on this vod-probe-based architecture specifically has only been dry-run so far — validate with Dry run ON on your own catalogue before turning it off, as [First import](docs/first-import.md) walks through.
 
 ## Install
 

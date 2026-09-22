@@ -1,7 +1,7 @@
 {
   "name": "VOD Manager",
-  "version": "2.4.0",
-  "description": "Keeps one winner per configured quality tier from the measurements of the vod-probe plugin and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
+  "version": "2.4.1",
+  "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
   "fields": [
@@ -17,55 +17,55 @@
       "label": "Qualities to keep (one winner per tier)",
       "type": "string",
       "default": "2160p,1080p",
-      "help_text": "Comma-separated, best first. Keeps one relation per listed tier the title actually has (e.g. one 2160p + one 1080p), never eliminates a title for lacking a tier. If none of the tiers match, falls back to the best quality available."
+      "help_text": "Comma-separated, best first. Empty = every tier. Falls back to the best available tier if none listed exist. Details: docs/settings.md."
     },
     {
       "id": "exclude_unmatched_quality",
       "label": "Exclude titles with none of the target qualities",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): a title with none of the qualities to keep still keeps its best available one. ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
+      "help_text": "OFF: keeps the best available tier instead. ON: drops the title entirely."
     },
     {
       "id": "keep_one_version_per_tier",
       "label": "Keep one version per quality tier",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language settings, but leaves every matching version in place, so Emby/Jellyfin can still show them all. ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
+      "help_text": "OFF (default): keep every matching version per tier. ON: one winner per tier (old, more aggressive behaviour). Details: docs/settings.md."
     },
     {
       "id": "target_languages",
       "label": "Target languages (ISO 639-2, e.g. fre,eng)",
       "type": "string",
       "default": "fre,eng",
-      "help_text": "Comma-separated. Keeps the fewest relations whose audio languages together cover this set."
+      "help_text": "Comma-separated. Empty = language is ignored."
     },
     {
       "id": "exclude_unmatched_language",
       "label": "Exclude relations matching none of the target languages",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
+      "help_text": "OFF: keeps the best-bitrate relation anyway. ON: drops that tier entirely."
     },
     {
       "id": "_section_exclusions",
       "label": "[EXCLUSIONS]",
       "type": "info",
-      "description": "Permanently exclude specific titles by TMDB id, regardless of quality/language settings — for one unwanted or wrongly-matched title, without disabling its whole category or provider. An excluded title's relations are all pruned (subject to Dry run), the same as a title with zero winners: no measurement or quality/language check is needed, since nothing is being selected."
+      "description": "Permanently exclude specific titles by TMDB id, regardless of the settings above. Details: docs/settings.md."
     },
     {
       "id": "excluded_movie_tmdbids",
       "label": "Movies to exclude (one TMDB id per line)",
       "type": "text",
       "default": "",
-      "help_text": "One entry per line: the movie's TMDB id, optionally followed by a free comment for your own reference (e.g. '603 wrong match for a similarly named film') — everything after the id is ignored. A line whose first token isn't a number is skipped. Movie and series TMDB ids are separate namespaces; this field only matches movies."
+      "help_text": "One TMDB id per line, optional free comment after it (e.g. '603 wrong match')."
     },
     {
       "id": "excluded_series_tmdbids",
       "label": "Series to exclude (one TMDB id per line)",
       "type": "text",
       "default": "",
-      "help_text": "Same format as the movies field above, matched against the series' own TMDB id. A series with no TMDB id at all cannot be excluded this way."
+      "help_text": "Same format, matched against the series' own TMDB id."
     },
     {
       "id": "batch_size",
@@ -79,7 +79,7 @@
       "id": "_section_series",
       "label": "[SERIES]",
       "type": "info",
-      "description": "Same select/prune pipeline as Films, per episode, using the same quality, language and dry-run settings above. The episodes are loaded and measured by vod-probe. Note: when Dispatcharr reloads a series (the interface does it when a series is opened after 24 hours) it erases what vod-probe wrote on that series' episodes, so the series waits until vod-probe has measured it again."
+      "description": "Same select/prune pipeline as Films, per episode, using the settings above. Details: docs/concepts.md."
     },
     {
       "id": "series_batch_size",
@@ -100,7 +100,7 @@
       "label": "Tags to strip (one per line)",
       "type": "text",
       "default": "NF -\nTOP -\n4K-FR -\nAMZ -\nFR -\nFR .\nD+ -\nD+  -\nUNV -\n4K-NF -\nPRMT -\n4K-AMZ -\n4K-D+ -\n4K-FR-HDR -\n4K-FR-\nA+ -\nA+\n4K-A+ -\n4K-MRVL -\nDWA -\n007 -\nK-FR -\nAR-SUBS -\n4M-AMZ -\n4K-",
-      "help_text": "Literal prefixes, matched case-insensitively at the start of the title. Longest match wins; stacked tags are stripped repeatedly."
+      "help_text": "Case-insensitive prefixes, stripped from the start of the title (stacked tags are stripped repeatedly)."
     },
     {
       "id": "auto_clean_titles",
@@ -113,7 +113,7 @@
       "id": "_section_strm",
       "label": "[.STRM OUTPUT]",
       "type": "info",
-      "description": "Dispatcharr's Xtream API always serves whichever relation's M3U account has the highest priority, regardless of category — a plain IPTV client can't select a specific quality tier. Writing .strm files pinned to each exact relation sidesteps that, for media servers (Emby, Jellyfin) that read them from disk. Safe to re-run: unchanged files are untouched, and a pruned/removed relation's file is deleted automatically (only files this plugin tracks — nothing added by hand is touched). Recommended order: Scan + Process until Queue Status reads 0 pending and 0 in progress, then Clean Titles, then Generate. Both Generate actions refuse to run at all while their queue still has pending or in-progress items, precisely to prevent that ordering mistake — generating too early would give unprobed titles a '- unprobed' filename and write files for relations about to be pruned, both of which get silently cleaned up (renamed/deleted) on the next Generate anyway, so nothing is gained by rushing it."
+      "description": "Optional: writes one .strm per kept relation, for Emby/Jellyfin multi-version playback. Run order: Scan + Process until Queue Status is empty, then Generate. Details: docs/strm-and-emby.md."
     },
     {
       "id": "strm_dispatcharr_url",
@@ -147,34 +147,34 @@
       "label": "Run .strm generation automatically with Scan + Process",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): only runs from the Generate buttons. When ON, this only applies to the scheduled Scan + Process (cron or Test Fire) — clicking Run manually never auto-generates, since Dispatcharr may still be matching newly-scanned content against providers and writing .strm files mid-match can produce bad/incomplete entries."
+      "help_text": "OFF: only the Generate buttons write files. ON: the scheduled (cron) Scan + Process also generates afterward — a manual Run click never does."
     },
     {
       "id": "strm_include_id_tag",
       "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
       "type": "boolean",
-      "default": false,
-      "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Every file name also repeats the tag: Jellyfin only recognises several movie files as versions of the same film when each file name starts character-for-character with the folder name, tag included. Episode files repeat the tag too for consistency, though Jellyfin's own episode version grouping (12.0+, 2026-09-07) works from the season/episode number instead, tag or not. Turning this on renames every existing tagged folder, and every file inside it, on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
+      "default": true,
+      "help_text": "ON (default): tags the folder and file names with the title's TMDB/IMDB id, for Emby/Jellyfin identification and Jellyfin's multi-version grouping. Flipping this renames the whole tagged tree on the next Generate. Details: docs/strm-and-emby.md."
     },
     {
       "id": "strm_require_id",
       "label": "Skip titles with no TMDB/IMDB id",
       "type": "boolean",
-      "default": false,
-      "help_text": "OFF (default): a title with no id still gets a .strm, named from the raw provider title text alone. ON: skip generating (or remove an already-generated) .strm entirely for a title with neither id — some providers never expose one for certain content (confirmed happening for entire series catalogues on at least one provider), and a media server has nothing reliable to identify that file by regardless of how clean the title text is."
+      "default": true,
+      "help_text": "ON (default): no .strm for a title with neither id (some providers never expose one). OFF: it still gets one, named from the raw title text."
     },
     {
       "id": "_section_schedule",
       "label": "[SCHEDULE]",
       "type": "info",
-      "description": "Runs on its own cron, independent of Dispatcharr's own refresh. To activate: 1) fill in Schedule (cron), Schedule timezone, and Scheduled action below, 2) click the [SCHEDULE] Apply action — this registers the schedule but does not run it yet, 3) after installing or updating this plugin, restart Dispatcharr once (a Celery worker only picks up a newly-registered scheduled task at its own startup — Apply succeeding is not enough on its own). Use [SCHEDULE] Test Fire Now to run it immediately and confirm it's wired up, and [SCHEDULE] Status to check when it last actually ran. Re-click Apply any time you change Schedule/timezone/action or any setting the scheduled run itself should use — settings are snapshotted at Apply time, not read live. Warning: leave the cron unset (Schedule left empty) during a first import or against a large catalogue — run Scan/Process/Clean Titles/Generate manually and watch the results until the queues settle down, then schedule it once you're confident in the picks it's making unattended."
+      "description": "Runs one action on its own cron. Fill in the fields below, click Apply, then restart Dispatcharr once. Leave Schedule empty until you trust the picks. Details: docs/scheduling.md."
     },
     {
       "id": "schedule_cron",
       "label": "Schedule (5-field cron)",
       "type": "string",
       "default": "",
-      "help_text": "'minute hour day-of-month month day-of-week'. Leave empty until you're ready to schedule — Apply Schedule falls back to every 6 hours if left blank when clicked. Best set a few minutes after Dispatcharr's VOD refresh, and after vod-probe has measured what the refresh brought in: a title vod-probe has not measured yet only waits for the next run."
+      "help_text": "'minute hour day-of-month month day-of-week'. Empty falls back to every 6 hours when Apply is clicked. Best set a few minutes after Dispatcharr's VOD refresh and vod-probe."
     },
     {
       "id": "schedule_timezone",
@@ -230,7 +230,7 @@
     {
       "id": "scan_and_process",
       "label": "[MOVIES] Scan + Process",
-      "description": "Starts a background run: scans for changed movies, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or you stop it. A movie whose relations vod-probe has not measured yet waits for the next run. The click returns at once; follow it with Queue Status, end it with Stop.",
+      "description": "Background run: scans, then selects and prunes until the queue is empty. Follow with Queue Status, end with Stop.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -270,7 +270,7 @@
     {
       "id": "generate_movie_strm",
       "label": "[MOVIES] Generate .strm Files",
-      "description": "Write one .strm per kept movie relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Movies queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
+      "description": "Write one .strm per kept movie relation. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -278,7 +278,7 @@
     {
       "id": "scan_and_process_series",
       "label": "[SERIES] Scan + Process",
-      "description": "Starts a background run: scans for changed series, then selects and prunes batch after batch, from vod-probe's measurements, until the queue is empty or you stop it. A series vod-probe has not finished waits for the next run. The click returns at once; follow it with Series Queue Status, end it with Stop.",
+      "description": "Background run: scans, then selects and prunes until the queue is empty. Follow with Queue Status, end with Stop.",
       "button_label": "Run",
       "button_variant": "filled",
       "button_color": "green"
@@ -318,7 +318,7 @@
     {
       "id": "generate_series_strm",
       "label": "[SERIES] Generate .strm Files",
-      "description": "Write one .strm per kept episode relation (needs the [.STRM OUTPUT] settings). Refuses to run while the Series queue still has pending/in-progress items, or while an earlier click is still generating — finish Scan + Process first. Runs in the background: the click returns at once and a notification appears when it is done.",
+      "description": "Write one .strm per kept episode relation. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -347,7 +347,7 @@
     {
       "id": "prune_orphaned_state",
       "label": "[MAINTENANCE] Prune Orphaned State",
-      "description": "Deletes this plugin's own queue and known-relations rows for movies and series Dispatcharr has since deleted (a removed provider group, a re-import). Never touches Dispatcharr's data or any .strm file. Uses Dry Run: ON only reports what it would delete. Refuses to run while a batch is in progress, and skips a content type Dispatcharr currently has none of.",
+      "description": "Deletes this plugin's own queue rows for titles Dispatcharr has since deleted. Uses Dry Run. Never touches Dispatcharr's data or .strm files.",
       "button_label": "Prune",
       "button_variant": "outline",
       "button_color": "orange"
@@ -355,7 +355,7 @@
     {
       "id": "retry_errored_titles",
       "label": "[MAINTENANCE] Retry Errored Titles",
-      "description": "Puts every title whose last attempt failed (Queue Status 'error') back in the queue, for both movies and series. A title that keeps failing is otherwise left alone until its relations change, so use this after a provider outage or once you have fixed the cause. Then run Scan + Process.",
+      "description": "Re-queues every title in 'error' status, movies and series. Follow with Scan + Process.",
       "button_label": "Retry",
       "button_variant": "outline",
       "button_color": "orange"
@@ -401,14 +401,6 @@
       "button_label": "Status",
       "button_variant": "outline",
       "button_color": "blue"
-    },
-    {
-      "id": "test_fire_schedule",
-      "label": "[SCHEDULE] Test Fire Now",
-      "description": "Runs the scheduled action immediately, bypassing the cron timer.",
-      "button_label": "Test Fire",
-      "button_variant": "outline",
-      "button_color": "grape"
     }
   ]
 }

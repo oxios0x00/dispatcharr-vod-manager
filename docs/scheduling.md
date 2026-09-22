@@ -7,7 +7,7 @@ The plugin can run one action on its own cron schedule, independent of Dispatcha
 1. Fill in **Schedule (5-field cron)** (`minute hour day-of-month month day-of-week`), **Schedule timezone** (an IANA name; empty means UTC) and **Scheduled action**.
 2. Click **[SCHEDULE] Apply**. This registers the schedule but does not run it.
 3. **Restart Dispatcharr once.** A Celery worker only registers a plugin's scheduled task when it starts. Without the restart, Apply succeeds silently but the task never fires and Status stays on "last run: never".
-4. Use **[SCHEDULE] Test Fire Now** to run it immediately and confirm it is wired up, and **[SCHEDULE] Status** to see when it last ran.
+4. Use **[SCHEDULE] Status** to see when it last ran.
 
 Re-click Apply whenever you change the cron, timezone or action, or any setting the scheduled run should use: settings are snapshotted at Apply time, not read live.
 
