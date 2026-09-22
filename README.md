@@ -1,6 +1,6 @@
 # VOD Manager
 
-Curates Dispatcharr's VOD catalogue automatically, for movies and series alike: reads what the companion plugin **vod-probe** measured for every relation (source) behind a duplicated title, picks the winning relation(s) per configurable target quality and language, and deletes the losing relations from Dispatcharr's own database so its native Xtream API serves one clean version per title. Optionally writes pinned `.strm` files so Emby/Jellyfin can show real, distinct multi-version playback for a single title.
+Curates Dispatcharr's VOD catalogue automatically, for movies and series alike: reads what the companion plugin **vod-probe** measured for every relation (source) behind a duplicated title, and keeps the ones that match your target quality and language settings — by default every matching version, or one winner per tier if you turn on more aggressive cleanup — deleting the rest from Dispatcharr's own database. Cleanup is optional: leave the quality and language settings empty to keep everything, or turn off Dry run only once you trust the picks. Optionally writes pinned `.strm` files so Emby/Jellyfin can show real, distinct multi-version playback for a single title.
 
 ## Status
 

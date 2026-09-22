@@ -88,13 +88,15 @@ def test_no_target_languages_falls_back_to_bitrate_within_tier():
     assert ids(winners) == [2], winners
 
 
-def test_no_target_qualities_configured_falls_back_to_best_available_tier():
+def test_no_target_qualities_means_every_tier_is_in_scope():
+    # Empty target_qualities is no longer "fall back to one tier": it means
+    # every tier the title has is in scope, one winner from each.
     candidates = [
         Candidate(1, ["fr", "en"], "720p", bitrate=1),
         Candidate(2, ["fr", "en"], "1080p", bitrate=1),
     ]
     winners = select_winners(candidates, TARGET_LANGUAGES, [])
-    assert ids(winners) == [2], winners
+    assert ids(winners) == [1, 2], winners
 
 
 def test_empty_candidates_returns_empty():
@@ -206,3 +208,71 @@ def test_exclude_unmatched_quality_is_a_noop_without_target_qualities():
     candidates = [Candidate(1, ["fr"], "720p", bitrate=3_000_000)]
     winners = select_winners(candidates, TARGET_LANGUAGES, [], exclude_unmatched_quality=True)
     assert ids(winners) == [1]
+
+
+# --- keep_one_per_tier=False: keep every matching version, no minimizing ---
+
+
+def test_keep_one_per_tier_false_keeps_every_language_matching_version_in_a_tier():
+    candidates = [
+        Candidate(1, ["fr"], "1080p", bitrate=5_000_000),
+        Candidate(2, ["en"], "1080p", bitrate=3_000_000),
+        Candidate(3, ["de"], "1080p", bitrate=9_000_000),
+    ]
+    winners = select_winners(candidates, TARGET_LANGUAGES, ["1080p"], keep_one_per_tier=False)
+    assert ids(winners) == [1, 2], winners
+
+
+def test_keep_one_per_tier_false_keeps_everyone_with_no_target_languages():
+    candidates = [
+        Candidate(1, ["fre"], "1080p", bitrate=5_000_000),
+        Candidate(2, ["jpn"], "1080p", bitrate=3_000_000),
+    ]
+    winners = select_winners(candidates, [], ["1080p"], keep_one_per_tier=False)
+    assert ids(winners) == [1, 2], winners
+
+
+def test_keep_one_per_tier_false_falls_back_to_keeping_everyone_when_none_matches():
+    candidates = [
+        Candidate(1, ["ger"], "1080p", bitrate=5_000_000),
+        Candidate(2, ["jpn"], "1080p", bitrate=3_000_000),
+    ]
+    winners = select_winners(candidates, TARGET_LANGUAGES, ["1080p"], keep_one_per_tier=False)
+    assert ids(winners) == [1, 2], winners
+
+
+def test_keep_one_per_tier_false_drops_the_tier_when_excluding_unmatched_language():
+    candidates = [Candidate(1, ["ger"], "1080p", bitrate=5_000_000)]
+    winners = select_winners(
+        candidates, TARGET_LANGUAGES, ["1080p"],
+        exclude_unmatched_language=True, keep_one_per_tier=False,
+    )
+    assert winners == []
+
+
+def test_keep_one_per_tier_false_keeps_every_tier_when_target_qualities_is_empty():
+    candidates = [
+        Candidate(1, ["fre"], "2160p", bitrate=1), Candidate(2, ["fre"], "1080p", bitrate=1),
+        Candidate(3, ["fre"], "720p", bitrate=1),
+    ]
+    winners = select_winners(candidates, [], [], keep_one_per_tier=False)
+    assert ids(winners) == [1, 2, 3], winners
+
+
+def test_keep_one_per_tier_false_still_falls_back_when_no_requested_tier_is_present():
+    candidates = [
+        Candidate(1, ["fre"], "720p", bitrate=1), Candidate(2, ["eng"], "720p", bitrate=2),
+    ]
+    winners = select_winners(
+        candidates, [], ["2160p", "1080p"], keep_one_per_tier=False,
+    )
+    assert ids(winners) == [1, 2], winners
+
+
+def test_keep_one_per_tier_false_can_still_drop_a_title_via_exclude_unmatched_quality():
+    candidates = [Candidate(1, ["fre"], "720p", bitrate=1)]
+    winners = select_winners(
+        candidates, [], ["2160p", "1080p"],
+        exclude_unmatched_quality=True, keep_one_per_tier=False,
+    )
+    assert winners == []

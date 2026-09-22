@@ -1,20 +1,29 @@
 """Automatic quality + language selection.
 
-Semantics (revised after real-catalogue testing — see NOTES.md point 12):
-  - target_qualities is a list of quality TIERS to each keep a winner
-    from, in priority order — not a single-winner tie-break. Setting
-    "2160p,1080p" means "keep one 2160p version AND one 1080p version",
-    each independently language-selected, if that title actually has
-    candidates in both tiers.
-  - A title is never eliminated for lacking a requested tier: if none of
-    the requested tiers have any candidate, fall back to the best
-    available tier for that title instead of returning nothing.
-  - Within a single tier, ties are broken by real probed video bitrate
-    (higher wins) rather than by a quality label — quality no longer
-    varies inside one tier by definition.
-  - Language coverage still uses the "minimal combination of versions
-    covering target_languages" rule from the original spec, now applied
-    independently per tier rather than globally.
+Two modes, chosen per call by `keep_one_per_tier`:
+  - True (cleanup): one winner per quality tier. Within a tier, the
+    minimal combination of versions covering target_languages is kept
+    (ties broken by real bitrate) — the original "pick the fewest files
+    that give you every target language" rule.
+  - False (default): every version in scope is kept. Within a tier,
+    every candidate whose audio includes at least one target language is
+    kept (all of them, not a minimal covering set); with no target
+    languages, every candidate in the tier is kept.
+
+target_qualities is the list of tiers in scope, most preferred first —
+not a single-winner tie-break: "2160p,1080p" means both tiers are
+handled, independently, if the title has candidates in either. An EMPTY
+target_qualities means every tier the title has is in scope (no quality
+filter at all) — this applies in both modes; leaving both
+target_qualities and target_languages empty keeps literally everything
+vod-probe measured.
+
+A title is never eliminated for lacking a *requested* (non-empty)
+target_qualities: if none of the requested tiers have any candidate, it
+falls back to the title's single best available tier, unless
+exclude_unmatched_quality asks to drop it instead. Likewise a tier with
+no language match falls back to keeping everything in it, unless
+exclude_unmatched_language asks to drop that tier instead.
 """
 from itertools import combinations
 
@@ -50,9 +59,9 @@ def _combo_bitrate_key(combo):
 
 def _select_within_pool(candidates, target_languages, exclude_unmatched_language=False):
     """Minimal-combination-covering-target-languages search within a
-    single pool of same-tier candidates, tie-broken by bitrate. This is
-    the original spec algorithm minus the quality tie-break, which is now
-    handled by partitioning into tiers before calling this.
+    single pool of same-tier candidates, tie-broken by bitrate. Used in
+    the "one winner per tier" mode; see select_all_in_pool for the
+    "keep every matching version" mode.
 
     exclude_unmatched_language: when a pool has zero coverage of any
     target language at all (every candidate is in a language nobody
@@ -107,6 +116,30 @@ def _select_within_pool(candidates, target_languages, exclude_unmatched_language
     return list(best_combo[1])
 
 
+def select_all_in_pool(candidates, target_languages, exclude_unmatched_language=False):
+    """Every candidate worth keeping within a single pool of same-tier
+    candidates, for the "keep every matching version" mode: no minimal
+    covering search, since there is no single-winner constraint to
+    minimize against.
+
+    With no target_languages, every candidate is kept. Otherwise, a
+    candidate is kept when its audio includes at least one target
+    language. If none does, the pool falls back to keeping everyone
+    (same "never drop silently" default as the one-winner mode) unless
+    exclude_unmatched_language asks to drop the pool instead."""
+    if not candidates:
+        return []
+
+    target_set = frozenset(target_languages or [])
+    if not target_set:
+        return list(candidates)
+
+    matched = [c for c in candidates if c.languages & target_set]
+    if matched:
+        return matched
+    return [] if exclude_unmatched_language else list(candidates)
+
+
 def _best_available_tier(by_tier):
     for tier in _QUALITY_LADDER:
         if tier in by_tier:
@@ -116,25 +149,27 @@ def _best_available_tier(by_tier):
 
 def select_winners(
     candidates, target_languages, target_qualities, exclude_unmatched_language=False,
-    exclude_unmatched_quality=False,
+    exclude_unmatched_quality=False, keep_one_per_tier=True,
 ):
-    """Return the list of winning Candidates for one title.
+    """Return the Candidates to keep for one title (or one episode).
 
     candidates: list[Candidate], must be non-empty.
     target_languages: list[str] — only the *set* matters, order doesn't.
-    target_qualities: list[str] — tiers to each keep a winner from, most
-        preferred first. A tier absent from this title's candidates is
-        simply skipped; if *none* of them are present, the title falls
+    target_qualities: list[str] — tiers in scope, most preferred first.
+        Empty means every tier the title has. A tier in this list absent
+        from the title's candidates is simply skipped; if the list is
+        non-empty and *none* of its tiers are present, the title falls
         back to its single best available tier rather than being dropped.
-    exclude_unmatched_quality: when none of target_qualities is present, the
-        title yields no winner instead of falling back to its best tier — an
-        explicit opt-in to dropping titles with nothing in the wanted tiers.
-    exclude_unmatched_language: see _select_within_pool. Applied
-        independently per tier (and to the fallback-tier pick when no
-        requested tier is present) — a title can end up with an empty
-        result if every tier it has hits this, which is the point: an
-        explicit opt-in to excluding language-mismatched content instead
-        of always keeping something regardless of language.
+    exclude_unmatched_quality: when target_qualities is non-empty and none
+        of it is present, drop the title instead of falling back to its
+        best tier.
+    exclude_unmatched_language: see _select_within_pool / select_all_in_pool.
+        Applied independently per tier — a title can end up with nothing
+        kept if every tier it has hits this.
+    keep_one_per_tier: True picks one winner per tier (the minimal
+        combination covering target_languages); False keeps every
+        candidate per tier that matches target_languages (or everyone,
+        with no target_languages).
     """
     if not candidates:
         return []
@@ -143,15 +178,18 @@ def select_winners(
     for c in candidates:
         by_tier.setdefault(c.quality_label, []).append(c)
 
-    requested_tiers = [q for q in (target_qualities or []) if q in by_tier]
+    pick = _select_within_pool if keep_one_per_tier else select_all_in_pool
 
-    if not requested_tiers:
-        if exclude_unmatched_quality and target_qualities:
-            return []
-        fallback_tier = _best_available_tier(by_tier)
-        return _select_within_pool(by_tier[fallback_tier], target_languages, exclude_unmatched_language)
+    if target_qualities:
+        tiers = [q for q in target_qualities if q in by_tier]
+        if not tiers:
+            if exclude_unmatched_quality:
+                return []
+            tiers = [_best_available_tier(by_tier)]
+    else:
+        tiers = list(by_tier.keys())
 
     winners = []
-    for tier in requested_tiers:
-        winners.extend(_select_within_pool(by_tier[tier], target_languages, exclude_unmatched_language))
+    for tier in tiers:
+        winners.extend(pick(by_tier[tier], target_languages, exclude_unmatched_language))
     return winners

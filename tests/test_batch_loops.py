@@ -294,3 +294,71 @@ def test_a_series_waits_until_vod_probe_has_finished_it_and_prunes_nothing_meanw
         assert plugin.store.queue_counts("series")["waiting"] == 2
 
     with_plugin(run)
+
+
+# --- keep_one_version_per_tier setting -------------------------------------
+
+
+def test_default_keeps_every_matching_version_instead_of_pruning_to_one():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        # Both versions carry the same target language: the old "one winner
+        # per tier" mode would minimize down to the better-bitrate one alone.
+        rows = [
+            movie(10, 1, measured("1080p", ("fre",), bit_rate=5_000_000)),
+            movie(11, 1, measured("1080p", ("fre",), bit_rate=3_000_000)),
+        ]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"target_qualities": "1080p", "target_languages": "fre"})
+            remaining = sorted(r.id for r in models.M3UMovieRelation.objects.rows)
+        assert remaining == [10, 11] and result["pruned"] == 0
+
+    with_plugin(run)
+
+
+def test_keep_one_version_per_tier_restores_the_old_single_winner_behaviour():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        rows = [
+            movie(10, 1, measured("1080p", ("fre",), bit_rate=5_000_000)),
+            movie(11, 1, measured("1080p", ("fre",), bit_rate=3_000_000)),
+        ]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {
+                "target_qualities": "1080p", "target_languages": "fre",
+                "keep_one_version_per_tier": True,
+            })
+            remaining = sorted(r.id for r in models.M3UMovieRelation.objects.rows)
+        assert remaining == [10] and result["pruned"] == 1
+
+    with_plugin(run)
+
+
+def test_empty_quality_and_language_settings_keep_literally_everything():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        rows = [
+            movie(10, 1, measured("2160p", ("fre",))), movie(11, 1, measured("1080p", ("ger",))),
+            movie(12, 1, measured("720p", ("jpn",))),
+        ]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"target_qualities": "", "target_languages": ""})
+            remaining = sorted(r.id for r in models.M3UMovieRelation.objects.rows)
+        assert remaining == [10, 11, 12] and result["pruned"] == 0
+
+    with_plugin(run)
+
+
+def test_series_default_also_keeps_every_matching_episode_version():
+    def run(plugin):
+        enqueue_all(plugin, "series", [7])
+        episodes = [
+            episode(700, 1, 7, measured("1080p", ("fre",), bit_rate=5_000_000)),
+            episode(701, 1, 7, measured("1080p", ("fre",), bit_rate=3_000_000)),
+        ]
+        with fake_django(series_relations=[series_relation(70, 7)], episode_relations=episodes) as models:
+            result = process_one(plugin, "series", {"target_qualities": "1080p", "target_languages": "fre"})
+            remaining = sorted(r.id for r in models.M3UEpisodeRelation.objects.rows)
+        assert remaining == [700, 701] and result["pruned"] == 0
+
+    with_plugin(run)

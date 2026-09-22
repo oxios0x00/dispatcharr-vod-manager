@@ -48,7 +48,7 @@ class _WaitingForMeasurements(Exception):
 
 class Plugin:
     name = "VOD Manager"
-    version = "2.2.0"
+    version = "2.3.0"
     description = (
         "Keeps one winner per configured quality tier from the measurements of the "
         "vod-probe plugin and prunes the rest — with optional .strm generation for "
@@ -97,6 +97,18 @@ class Plugin:
             "help_text": (
                 "OFF (default): a title with none of the qualities to keep still keeps its best available one. "
                 "ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
+            ),
+        },
+        {
+            "id": "keep_one_version_per_tier",
+            "label": "Keep one version per quality tier",
+            "type": "boolean",
+            "default": False,
+            "help_text": (
+                "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language "
+                "settings, but leaves every matching version in place, so Emby can still show them all. "
+                "ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the "
+                "rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
             ),
         },
         {
@@ -926,6 +938,7 @@ class Plugin:
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
             exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
+            keep_one_per_tier = bool(settings.get("keep_one_version_per_tier", False))
             dry_run = bool(settings.get("dry_run", True))
             batch_size = int(settings.get("batch_size", 25) or 25) if is_movie \
                 else int(settings.get("series_batch_size", 5) or 5)
@@ -950,7 +963,7 @@ class Plugin:
                 try:
                     pruned_total += process_one(
                         content_id, target_qualities, target_languages,
-                        exclude_unmatched_language, exclude_unmatched_quality, dry_run,
+                        exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier, dry_run,
                     )
                     self.store.mark_done(content_type, content_id)
                     processed += 1
@@ -984,7 +997,7 @@ class Plugin:
 
     def _process_one_movie(
         self, movie_id, target_qualities, target_languages, exclude_unmatched_language,
-        exclude_unmatched_quality, dry_run,
+        exclude_unmatched_quality, keep_one_per_tier, dry_run,
     ):
         """Select the winning relation(s) of one movie from vod-probe's
         measurements and, unless dry_run, prune the losers. Returns the number
@@ -1014,7 +1027,8 @@ class Plugin:
             raise RuntimeError(f"movie {movie_id}: no relation could be measured")
 
         winners = select_winners(
-            candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality
+            candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality,
+            keep_one_per_tier,
         )
         winner_ids = {c.relation_id for c in winners}
         all_ids = {r.id for r in relations}
@@ -1069,7 +1083,7 @@ class Plugin:
 
     def _process_one_series(
         self, series_id, target_qualities, target_languages, exclude_unmatched_language,
-        exclude_unmatched_quality, dry_run,
+        exclude_unmatched_quality, keep_one_per_tier, dry_run,
     ):
         """Select the winning relation(s) of every episode of one series from
         vod-probe's measurements and, unless dry_run, prune the losers. The
@@ -1115,7 +1129,7 @@ class Plugin:
                 continue
             winners = select_winners(
                 candidates, target_languages, target_qualities,
-                exclude_unmatched_language, exclude_unmatched_quality,
+                exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier,
             )
             winner_ids = {c.relation_id for c in winners}
             decisions.append({r.id for r in ep_relations} - winner_ids)

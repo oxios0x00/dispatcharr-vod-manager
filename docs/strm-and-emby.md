@@ -2,7 +2,7 @@
 
 ## Why
 
-A player connected to Dispatcharr through the Xtream API gets one version per title and cannot choose another. Emby and Jellyfin can show several versions of one title if each is a separate file. **Generate Movie / Series .strm Files** writes one `.strm` per kept relation, pinned to that exact relation through Dispatcharr's `/proxy/vod/<type>/<uuid>?stream_id=` endpoint, so every version is independently playable and goes through Dispatcharr (connection handling, no provider credentials in the files).
+A player connected to Dispatcharr through the Xtream API gets one version per title and cannot choose another. Emby and Jellyfin can show several versions of one title if each is a separate file. **Generate Movie / Series .strm Files** writes one `.strm` per kept relation (every version your quality/language settings keep, by default more than one per tier — see [Concepts](concepts.md)), pinned to that exact relation through Dispatcharr's `/proxy/vod/<type>/<uuid>?stream_id=` endpoint, so every version is independently playable and goes through Dispatcharr (connection handling, no provider credentials in the files).
 
 A `.strm` can only point at a title Dispatcharr has imported, since the URL needs the title's uuid in Dispatcharr's database.
 

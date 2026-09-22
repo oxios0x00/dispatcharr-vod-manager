@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Keeps one winner per configured quality tier from the measurements of the vod-probe plugin and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -25,6 +25,13 @@
       "type": "boolean",
       "default": false,
       "help_text": "OFF (default): a title with none of the qualities to keep still keeps its best available one. ON: it is dropped entirely, so a title that only exists in 720p disappears when you keep 2160p and 1080p."
+    },
+    {
+      "id": "keep_one_version_per_tier",
+      "label": "Keep one version per quality tier",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language settings, but leaves every matching version in place, so Emby can still show them all. ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
     },
     {
       "id": "target_languages",

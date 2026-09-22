@@ -9,7 +9,7 @@ Groups are managed in Dispatcharr, not in this plugin. The plugin reacts to what
 3. **Click Scan + Process** (movies) or the `[SERIES]` equivalent. A title that gained a relation is put back in the queue; it waits until vod-probe has measured the **new** relation, then the selection runs again over all the versions.
 4. **Generate `.strm` files** once the queue is empty.
 
-Whether a new, better version replaces the old one depends on `target_qualities`: with the default `2160p,1080p` both tiers are kept, one winner each. A tier that isn't listed is pruned as soon as a listed tier exists.
+Whether a new, better version replaces the old one depends on your settings: with the default `2160p,1080p` and **Keep one version per quality tier** off, both tiers are kept in full — the new relation adds to what is already there rather than replacing it. Turn that setting on for the old one-winner-per-tier behaviour, and a tier that isn't listed is pruned either way as soon as a listed tier exists.
 
 ## Removing a group
 

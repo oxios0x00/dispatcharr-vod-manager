@@ -20,10 +20,17 @@ VOD Manager decides a title only when **every** relation of it has an answer. A 
 
 ## Selection
 
-For each title the plugin keeps **one winner per tier** listed in `target_qualities` (default `2160p,1080p`), so a film available in both tiers keeps its 2160p and its 1080p. Within a tier, the winner is the smallest set of versions whose audio tracks cover `target_languages` (default `fre,eng`), and ties go to the higher bitrate. Two rules to remember:
+For each title, every tier listed in `target_qualities` (default `2160p,1080p`) is in scope — an **empty** list means every tier the title has is in scope, with no quality filter at all. Within a tier, a version is kept when its audio covers one of `target_languages` (default `fre,eng`); an empty list means every version in the tier is kept, language aside.
 
-- By default a title is **never dropped for lacking a tier**: if none of the listed tiers exists, the best available one is kept — which is why an occasional `720p` remains when that is all a title has. Turning on **Exclude titles with none of the target qualities** drops such titles instead.
-- Any tier not listed (a `720p` next to a `1080p`, for instance) is pruned.
+**Keep one version per quality tier** (off by default) decides what happens to the versions that match, within one tier:
+
+- **Off** (default): every matching version is kept. Cleanup only removes what falls outside your quality/language settings — duplicates in the tiers and languages you asked for are left alone, so Emby can still show them all. Leave both `target_qualities` and `target_languages` empty to keep literally everything vod-probe measured.
+- **On**: only the smallest set of versions whose audio tracks together cover `target_languages` is kept per tier (ties go to the higher bitrate) — the original, more aggressive cleanup, one winner per tier.
+
+Two rules apply in both modes:
+
+- A title is **never dropped for lacking a requested tier**: if `target_qualities` is non-empty and none of its tiers exist for that title, the best available tier is used instead — which is why an occasional `720p` remains when that is all a title has. Turning on **Exclude titles with none of the target qualities** drops such titles instead.
+- A tier where nothing matches `target_languages` falls back to keeping everything in it (every version, or the single best-bitrate one with **Keep one version per quality tier** on), unless **Exclude relations matching none of the target languages** is on, which drops it instead.
 
 Nothing in the selection currently considers the video codec or the HDR type. A 3840x2160 H.264 SDR file and an HEVC Dolby Vision file are both simply `2160p`.
 
