@@ -19,20 +19,21 @@ def load_plugin_module():
 
 
 plugin_module = load_plugin_module()
+pipeline_module = importlib.import_module("vod_manager_pkg.pipeline")
 
 
 def with_plugin(fn):
     tmp = tempfile.mkdtemp()
     os.environ["VOD_MANAGER_DATA_DIR"] = tmp
     # Django is not installed here: the two pieces that need it are stubbed.
-    original = plugin_module._release_db_connections
-    plugin_module._release_db_connections = lambda: None
+    original = pipeline_module._release_db_connections
+    pipeline_module._release_db_connections = lambda: None
     try:
         plugin = plugin_module.Plugin()
         plugin._catalog_stats = lambda _settings: None
         fn(plugin)
     finally:
-        plugin_module._release_db_connections = original
+        pipeline_module._release_db_connections = original
         os.environ.pop("VOD_MANAGER_DATA_DIR", None)
         shutil.rmtree(tmp)
 

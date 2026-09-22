@@ -16,6 +16,8 @@ RUNTIME_FILES = [
     "__init__.py",
     "plugin.py",
     "plugin.json",
+    "pipeline.py",
+    "schedule.py",
     "store.py",
     "selection.py",
     "measurements.py",
