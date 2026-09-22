@@ -44,7 +44,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 | Library root path | `/data/strm` | Where files are written, inside the container. |
 | Movies / Series subfolder | `movies` / `series` | Folder names under the root. |
 | Run .strm generation automatically with Scan + Process | OFF | Only affects the scheduled Scan + Process, never a manual click. |
-| Include `[tmdbid-…]` in the folder name | OFF | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions, and kept on episode files ready for whenever Jellyfin supports episode versions too. Turning it on renames every tagged folder, and every file inside it, at the next Generate. |
+| Include `[tmdbid-…]` in the folder name | OFF | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions (episode grouping works differently, see [Limitations](limitations.md)). Turning it on renames every tagged folder, and every file inside it, at the next Generate. |
 | Skip titles with no TMDB/IMDB id | OFF | No `.strm` at all for those titles (and an existing one is removed). |
 
 ## Schedule

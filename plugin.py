@@ -270,7 +270,7 @@ class Plugin:
             "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
             "type": "boolean",
             "default": False,
-            "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Every file name also repeats the tag: Jellyfin only recognises several files as versions of the same movie when each file name starts character-for-character with the folder name, tag included. Jellyfin has no version selector for episodes today regardless of naming, but episode files repeat the tag too so nothing needs renaming again if that's ever fixed upstream. Turning this on renames every existing tagged folder, and every file inside it, on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
+            "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Every file name also repeats the tag: Jellyfin only recognises several movie files as versions of the same film when each file name starts character-for-character with the folder name, tag included. Episode files repeat the tag too for consistency, though Jellyfin's own episode version grouping (12.0+, 2026-09-07) works from the season/episode number instead, tag or not. Turning this on renames every existing tagged folder, and every file inside it, on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
         },
         {
             "id": "strm_require_id",
@@ -1440,11 +1440,9 @@ class Plugin:
                     continue
                 series_seen.add(series.id)
 
-                # Jellyfin has no version selector for episodes today (see
-                # Limitations), so repeating the tag here has no effect yet —
-                # but if that's ever fixed upstream, matching the movie
-                # naming (tag repeated on the file) means episodes are ready
-                # without another rename pass.
+                # Jellyfin 12.0+ groups episode versions by season/episode
+                # number, not by this tag (unlike movies, see Limitations) —
+                # repeated here only for naming consistency with movies.
                 tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
                 series_folder_name = sanitize_filename(series.name + tag)
                 series_dir = os.path.join(library_dir, series_folder_name)
