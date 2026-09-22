@@ -862,7 +862,7 @@ class Plugin:
         return len(current), len(changed)
 
     def _scan_movies(self, settings):
-        from apps.vod.models import Movie, M3UMovieRelation
+        from apps.vod.models import M3UMovieRelation
 
         scanned, enqueued = self._enqueue_changed(
             CONTENT_TYPE_MOVIE, M3UMovieRelation, "movie_id"
@@ -1048,7 +1048,7 @@ class Plugin:
     # here.
 
     def _scan_series(self, settings):
-        from apps.vod.models import Series, M3USeriesRelation
+        from apps.vod.models import M3USeriesRelation
 
         scanned, enqueued = self._enqueue_changed(
             CONTENT_TYPE_SERIES, M3USeriesRelation, "series_id"

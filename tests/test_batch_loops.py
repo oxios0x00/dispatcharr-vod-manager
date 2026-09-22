@@ -6,7 +6,7 @@ import sys
 import types
 from types import SimpleNamespace
 
-from test_pipeline import plugin_module, with_plugin
+from test_pipeline import with_plugin
 
 SETTINGS = {
     "dry_run": False,

@@ -1,0 +1,6 @@
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+# Real bugs only (pyflakes + syntax errors) — no style/formatting nitpicks.
+select = ["F", "E9"]
