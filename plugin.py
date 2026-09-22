@@ -48,7 +48,7 @@ class _WaitingForMeasurements(Exception):
 
 class Plugin:
     name = "VOD Manager"
-    version = "2.3.0"
+    version = "2.4.0"
     description = (
         "Keeps one winner per configured quality tier from the measurements of the "
         "vod-probe plugin and prunes the rest — with optional .strm generation for "
@@ -106,7 +106,7 @@ class Plugin:
             "default": False,
             "help_text": (
                 "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language "
-                "settings, but leaves every matching version in place, so Emby can still show them all. "
+                "settings, but leaves every matching version in place, so Emby/Jellyfin can still show them all. "
                 "ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the "
                 "rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
             ),
@@ -126,6 +126,39 @@ class Plugin:
             "help_text": (
                 "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. "
                 "ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
+            ),
+        },
+        {
+            "id": "_section_exclusions",
+            "label": "[EXCLUSIONS]",
+            "type": "info",
+            "description": (
+                "Permanently exclude specific titles by TMDB id, regardless of quality/language settings — for "
+                "one unwanted or wrongly-matched title, without disabling its whole category or provider. An "
+                "excluded title's relations are all pruned (subject to Dry run), the same as a title with zero "
+                "winners: no measurement or quality/language check is needed, since nothing is being selected."
+            ),
+        },
+        {
+            "id": "excluded_movie_tmdbids",
+            "label": "Movies to exclude (one TMDB id per line)",
+            "type": "text",
+            "default": "",
+            "help_text": (
+                "One entry per line: the movie's TMDB id, optionally followed by a free comment for your own "
+                "reference (e.g. '603 wrong match for a similarly named film') — everything after the id is "
+                "ignored. A line whose first token isn't a number is skipped. Movie and series TMDB ids are "
+                "separate namespaces; this field only matches movies."
+            ),
+        },
+        {
+            "id": "excluded_series_tmdbids",
+            "label": "Series to exclude (one TMDB id per line)",
+            "type": "text",
+            "default": "",
+            "help_text": (
+                "Same format as the movies field above, matched against the series' own TMDB id. A series with "
+                "no TMDB id at all cannot be excluded this way."
             ),
         },
         {
@@ -237,7 +270,7 @@ class Plugin:
             "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
             "type": "boolean",
             "default": False,
-            "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder (not the files inside it — they'd all share the same id, so it would be pure redundancy) when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing tagged folder on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
+            "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Every file name also repeats the tag: Jellyfin only recognises several files as versions of the same movie when each file name starts character-for-character with the folder name, tag included. Jellyfin has no version selector for episodes today regardless of naming, but episode files repeat the tag too so nothing needs renaming again if that's ever fixed upstream. Turning this on renames every existing tagged folder, and every file inside it, on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using.",
         },
         {
             "id": "strm_require_id",
@@ -934,11 +967,16 @@ class Plugin:
         if not acquired:
             return self._busy_lock_message("A movie batch" if is_movie else "A series batch", held_since)
         try:
+            from .exclusions import parse_excluded_ids
+
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
             exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
             keep_one_per_tier = bool(settings.get("keep_one_version_per_tier", False))
+            excluded_tmdbids = parse_excluded_ids(
+                settings.get("excluded_movie_tmdbids") if is_movie else settings.get("excluded_series_tmdbids")
+            )
             dry_run = bool(settings.get("dry_run", True))
             batch_size = int(settings.get("batch_size", 25) or 25) if is_movie \
                 else int(settings.get("series_batch_size", 5) or 5)
@@ -963,7 +1001,8 @@ class Plugin:
                 try:
                     pruned_total += process_one(
                         content_id, target_qualities, target_languages,
-                        exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier, dry_run,
+                        exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier,
+                        excluded_tmdbids, dry_run,
                     )
                     self.store.mark_done(content_type, content_id)
                     processed += 1
@@ -997,40 +1036,47 @@ class Plugin:
 
     def _process_one_movie(
         self, movie_id, target_qualities, target_languages, exclude_unmatched_language,
-        exclude_unmatched_quality, keep_one_per_tier, dry_run,
+        exclude_unmatched_quality, keep_one_per_tier, excluded_tmdbids, dry_run,
     ):
         """Select the winning relation(s) of one movie from vod-probe's
-        measurements and, unless dry_run, prune the losers. Returns the number
-        of relations pruned (or that would be)."""
+        measurements and, unless dry_run, prune the losers. A movie whose
+        TMDB id is in excluded_tmdbids skips measurement and selection
+        entirely: it is pruned to nothing, like a title with zero winners.
+        Returns the number of relations pruned (or that would be)."""
         from apps.vod.models import M3UMovieRelation
         from . import measurements
         from .selection import Candidate, select_winners
 
         relations = list(
             M3UMovieRelation.objects.filter(movie_id=movie_id, m3u_account__is_active=True)
+            .select_related("movie")
         )
         if not relations:
             self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set())
             return 0
 
-        states = [measurements.state(r.custom_properties) for r in relations]
-        if measurements.MISSING in states:
-            raise _WaitingForMeasurements()
-        candidates = [
-            Candidate(
-                r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
-                bitrate=measurements.bitrate(r.custom_properties),
-            )
-            for r, state in zip(relations, states) if state == measurements.MEASURED
-        ]
-        if not candidates:
-            raise RuntimeError(f"movie {movie_id}: no relation could be measured")
+        if excluded_tmdbids and str(relations[0].movie.tmdb_id) in excluded_tmdbids:
+            winner_ids = set()
+        else:
+            states = [measurements.state(r.custom_properties) for r in relations]
+            if measurements.MISSING in states:
+                raise _WaitingForMeasurements()
+            candidates = [
+                Candidate(
+                    r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
+                    bitrate=measurements.bitrate(r.custom_properties),
+                )
+                for r, state in zip(relations, states) if state == measurements.MEASURED
+            ]
+            if not candidates:
+                raise RuntimeError(f"movie {movie_id}: no relation could be measured")
 
-        winners = select_winners(
-            candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality,
-            keep_one_per_tier,
-        )
-        winner_ids = {c.relation_id for c in winners}
+            winners = select_winners(
+                candidates, target_languages, target_qualities, exclude_unmatched_language, exclude_unmatched_quality,
+                keep_one_per_tier,
+            )
+            winner_ids = {c.relation_id for c in winners}
+
         all_ids = {r.id for r in relations}
         loser_ids = all_ids - winner_ids
 
@@ -1083,25 +1129,31 @@ class Plugin:
 
     def _process_one_series(
         self, series_id, target_qualities, target_languages, exclude_unmatched_language,
-        exclude_unmatched_quality, keep_one_per_tier, dry_run,
+        exclude_unmatched_quality, keep_one_per_tier, excluded_tmdbids, dry_run,
     ):
         """Select the winning relation(s) of every episode of one series from
         vod-probe's measurements and, unless dry_run, prune the losers. The
         whole series is checked before anything is deleted: an episode nobody
         has measured yet (or whose result Dispatcharr erased by reloading the
-        series) makes the series wait. Returns the number of episode
-        relations pruned (or that would be)."""
+        series) makes the series wait. A series whose TMDB id is in
+        excluded_tmdbids skips measurement and selection entirely: every
+        episode relation is pruned, like every episode having zero winners.
+        Returns the number of episode relations pruned (or that would be)."""
         from apps.vod.models import M3USeriesRelation, M3UEpisodeRelation
         from . import measurements
         from .selection import Candidate, select_winners
 
         series_relations = list(
             M3USeriesRelation.objects.filter(series_id=series_id, m3u_account__is_active=True)
+            .select_related("series")
         )
         if not series_relations:
             self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set())
             return 0
-        if not all(measurements.series_ready(r.custom_properties) for r in series_relations):
+
+        excluded = bool(excluded_tmdbids) and str(series_relations[0].series.tmdb_id) in excluded_tmdbids
+
+        if not excluded and not all(measurements.series_ready(r.custom_properties) for r in series_relations):
             raise _WaitingForMeasurements()
 
         by_episode = {}
@@ -1109,35 +1161,40 @@ class Plugin:
             episode__series_id=series_id, m3u_account__is_active=True
         ):
             by_episode.setdefault(relation.episode_id, []).append(relation)
-        if not by_episode:
-            raise _WaitingForMeasurements()
 
-        decisions, without_candidates = [], 0
-        for ep_relations in by_episode.values():
-            states = [measurements.state(r.custom_properties) for r in ep_relations]
-            if measurements.MISSING in states:
+        if excluded:
+            loser_ids = {r.id for relations in by_episode.values() for r in relations}
+        else:
+            if not by_episode:
                 raise _WaitingForMeasurements()
-            candidates = [
-                Candidate(
-                    r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
-                    bitrate=measurements.bitrate(r.custom_properties),
+
+            decisions, without_candidates = [], 0
+            for ep_relations in by_episode.values():
+                states = [measurements.state(r.custom_properties) for r in ep_relations]
+                if measurements.MISSING in states:
+                    raise _WaitingForMeasurements()
+                candidates = [
+                    Candidate(
+                        r.id, measurements.languages(r.custom_properties), measurements.tier(r.custom_properties),
+                        bitrate=measurements.bitrate(r.custom_properties),
+                    )
+                    for r, state in zip(ep_relations, states) if state == measurements.MEASURED
+                ]
+                if not candidates:
+                    without_candidates += 1
+                    continue
+                winners = select_winners(
+                    candidates, target_languages, target_qualities,
+                    exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier,
                 )
-                for r, state in zip(ep_relations, states) if state == measurements.MEASURED
-            ]
-            if not candidates:
-                without_candidates += 1
-                continue
-            winners = select_winners(
-                candidates, target_languages, target_qualities,
-                exclude_unmatched_language, exclude_unmatched_quality, keep_one_per_tier,
-            )
-            winner_ids = {c.relation_id for c in winners}
-            decisions.append({r.id for r in ep_relations} - winner_ids)
+                winner_ids = {c.relation_id for c in winners}
+                decisions.append({r.id for r in ep_relations} - winner_ids)
 
-        if without_candidates == len(by_episode):
-            raise RuntimeError(f"series {series_id}: no episode relation could be measured")
+            if without_candidates == len(by_episode):
+                raise RuntimeError(f"series {series_id}: no episode relation could be measured")
 
-        loser_ids = set().union(*decisions) if decisions else set()
+            loser_ids = set().union(*decisions) if decisions else set()
+
         if loser_ids and not dry_run:
             M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete()
 
@@ -1290,16 +1347,18 @@ class Plugin:
                     # like a pruned relation would be.
                     skipped_no_id += 1
                     continue
-                safe_name = sanitize_filename(movie.name)
                 tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
-                movie_dir = os.path.join(library_dir, sanitize_filename(movie.name + tag))
+                folder_name = sanitize_filename(movie.name + tag)
+                movie_dir = os.path.join(library_dir, folder_name)
                 suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
 
                 for rel, suffix in best_quality_first(movie_relations, suffixes):
-                    # The id tag lives on the folder only — every file inside
-                    # it shares the same movie, so repeating the tag on each
-                    # one would be pure redundancy.
-                    path = os.path.join(movie_dir, f"{safe_name}{suffix}.strm")
+                    # Jellyfin only groups several files as versions of one
+                    # movie when each file name starts character-for-character
+                    # with the folder name, tag included — so the file name
+                    # must repeat exactly what the folder is named, not just
+                    # the plain title.
+                    path = os.path.join(movie_dir, f"{folder_name}{suffix}.strm")
                     url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
                     try:
                         result = write_strm_if_changed(path, url)
@@ -1381,15 +1440,17 @@ class Plugin:
                     continue
                 series_seen.add(series.id)
 
-                # The id tag lives on the series folder only — every episode
-                # under it shares the same series, so repeating the tag on
-                # each episode filename would be pure redundancy.
-                safe_series = sanitize_filename(series.name)
+                # Jellyfin has no version selector for episodes today (see
+                # Limitations), so repeating the tag here has no effect yet —
+                # but if that's ever fixed upstream, matching the movie
+                # naming (tag repeated on the file) means episodes are ready
+                # without another rename pass.
                 tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
-                series_dir = os.path.join(library_dir, sanitize_filename(series.name + tag))
+                series_folder_name = sanitize_filename(series.name + tag)
+                series_dir = os.path.join(library_dir, series_folder_name)
                 season_num = episode.season_number or 1
                 episode_num = episode.episode_number or 0
-                base_filename = f"{safe_series} - S{season_num:02d}E{episode_num:02d}"
+                base_filename = f"{series_folder_name} - S{season_num:02d}E{episode_num:02d}"
                 season_dir = os.path.join(series_dir, f"Season {season_num:02d}")
 
                 suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])

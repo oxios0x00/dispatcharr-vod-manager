@@ -20,7 +20,7 @@ Keep **Dry run** ON and the batch size small, then: **Scan + Process** (it runs 
 
 ## Documentation
 
-- [Concepts](docs/concepts.md) — titles, relations, probing, selection, the queue.
+- [Concepts](docs/concepts.md) — titles, relations, measurements, selection, exclusions, the queue.
 - [First import](docs/first-import.md) — the order to follow on a fresh catalogue.
 - [Adding or removing a provider group](docs/add-or-remove-a-group.md)
 - [.strm files and Emby / Jellyfin](docs/strm-and-emby.md)

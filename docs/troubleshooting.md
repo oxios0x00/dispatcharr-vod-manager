@@ -40,4 +40,4 @@ Titles with nothing better keep their best available tier; see [Concepts](concep
 
 ## Emby plays the wrong version by default
 
-See [.strm files and Emby](strm-and-emby.md).
+See [.strm files and Emby / Jellyfin](strm-and-emby.md).

@@ -47,6 +47,9 @@ class FakeQuerySet:
     def values_list(self, *_fields, **_kwargs):
         return [r.id for r in self.rows]
 
+    def select_related(self, *_fields):
+        return self
+
     def delete(self):
         for row in self.rows:
             self.manager.rows.remove(row)
@@ -91,12 +94,18 @@ def measured(tier, languages=("fre",), bit_rate=8_000_000, status="ok"):
     }}
 
 
-def movie(relation_id, movie_id, properties):
-    return SimpleNamespace(id=relation_id, movie_id=movie_id, custom_properties=properties)
+def movie(relation_id, movie_id, properties, tmdb_id=None):
+    return SimpleNamespace(
+        id=relation_id, movie_id=movie_id, custom_properties=properties,
+        movie=SimpleNamespace(tmdb_id=tmdb_id),
+    )
 
 
-def series_relation(relation_id, series_id, properties=None):
-    return SimpleNamespace(id=relation_id, series_id=series_id, custom_properties=properties or {"probe": {"status": "ok"}})
+def series_relation(relation_id, series_id, properties=None, tmdb_id=None):
+    return SimpleNamespace(
+        id=relation_id, series_id=series_id, custom_properties=properties or {"probe": {"status": "ok"}},
+        series=SimpleNamespace(tmdb_id=tmdb_id),
+    )
 
 
 def episode(relation_id, episode_id, series_id, properties):
@@ -360,5 +369,88 @@ def test_series_default_also_keeps_every_matching_episode_version():
             result = process_one(plugin, "series", {"target_qualities": "1080p", "target_languages": "fre"})
             remaining = sorted(r.id for r in models.M3UEpisodeRelation.objects.rows)
         assert remaining == [700, 701] and result["pruned"] == 0
+
+    with_plugin(run)
+
+
+# --- excluding titles by tmdbid ----------------------------------------------
+
+
+def test_an_excluded_movie_is_fully_pruned_even_though_its_only_version_would_normally_be_kept():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        rows = [movie(10, 1, measured("2160p", ("fre", "eng")), tmdb_id=603)]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"excluded_movie_tmdbids": "603 wrong match"})
+            remaining = [r.id for r in models.M3UMovieRelation.objects.rows]
+        assert remaining == [] and result["pruned"] == 1
+
+    with_plugin(run)
+
+
+def test_an_excluded_movie_is_pruned_without_waiting_for_measurement():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        # No probe block at all — a non-excluded movie in this state would wait.
+        rows = [movie(10, 1, {}, tmdb_id=603)]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"excluded_movie_tmdbids": "603"})
+            remaining = [r.id for r in models.M3UMovieRelation.objects.rows]
+        assert remaining == [] and result["pruned"] == 1 and result["waiting"] == 0
+
+    with_plugin(run)
+
+
+def test_excluded_movie_dry_run_prunes_nothing():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        rows = [movie(10, 1, measured("2160p"), tmdb_id=603)]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"excluded_movie_tmdbids": "603", "dry_run": True})
+            assert len(models.M3UMovieRelation.objects.rows) == 1
+        assert result["pruned"] == 1
+
+    with_plugin(run)
+
+
+def test_a_movie_whose_tmdbid_is_not_in_the_excluded_list_is_unaffected():
+    def run(plugin):
+        enqueue_all(plugin, "movie", [1])
+        rows = [movie(10, 1, measured("2160p", ("fre", "eng")), tmdb_id=999)]
+        with fake_django(movie_relations=rows) as models:
+            result = process_one(plugin, "movie", {"excluded_movie_tmdbids": "603 some other film"})
+            remaining = [r.id for r in models.M3UMovieRelation.objects.rows]
+        assert remaining == [10] and result["pruned"] == 0
+
+    with_plugin(run)
+
+
+def test_an_excluded_series_has_every_episode_relation_pruned_without_waiting():
+    def run(plugin):
+        enqueue_all(plugin, "series", [7])
+        episodes = [
+            episode(700, 1, 7, measured("2160p", ("fre",))),
+            episode(701, 2, 7, {}),  # unmeasured — would normally make the series wait
+        ]
+        with fake_django(
+            series_relations=[series_relation(70, 7, tmdb_id=1396)], episode_relations=episodes
+        ) as models:
+            result = process_one(plugin, "series", {"excluded_series_tmdbids": "1396 wrong match"})
+            remaining = [r.id for r in models.M3UEpisodeRelation.objects.rows]
+        assert remaining == [] and result["pruned"] == 2 and result["waiting"] == 0
+
+    with_plugin(run)
+
+
+def test_excluded_series_dry_run_prunes_nothing():
+    def run(plugin):
+        enqueue_all(plugin, "series", [7])
+        episodes = [episode(700, 1, 7, measured("2160p", ("fre",)))]
+        with fake_django(
+            series_relations=[series_relation(70, 7, tmdb_id=1396)], episode_relations=episodes
+        ) as models:
+            result = process_one(plugin, "series", {"excluded_series_tmdbids": "1396", "dry_run": True})
+            assert len(models.M3UEpisodeRelation.objects.rows) == 1
+        assert result["pruned"] == 1
 
     with_plugin(run)

@@ -24,7 +24,7 @@ For each title, every tier listed in `target_qualities` (default `2160p,1080p`) 
 
 **Keep one version per quality tier** (off by default) decides what happens to the versions that match, within one tier:
 
-- **Off** (default): every matching version is kept. Cleanup only removes what falls outside your quality/language settings — duplicates in the tiers and languages you asked for are left alone, so Emby can still show them all. Leave both `target_qualities` and `target_languages` empty to keep literally everything vod-probe measured.
+- **Off** (default): every matching version is kept. Cleanup only removes what falls outside your quality/language settings — duplicates in the tiers and languages you asked for are left alone, so Emby/Jellyfin can still show them all. Leave both `target_qualities` and `target_languages` empty to keep literally everything vod-probe measured.
 - **On**: only the smallest set of versions whose audio tracks together cover `target_languages` is kept per tier (ties go to the higher bitrate) — the original, more aggressive cleanup, one winner per tier.
 
 Two rules apply in both modes:
@@ -34,10 +34,14 @@ Two rules apply in both modes:
 
 Nothing in the selection currently considers the video codec or the HDR type. A 3840x2160 H.264 SDR file and an HEVC Dolby Vision file are both simply `2160p`.
 
+## Exclusions
+
+A title listed by TMDB id in **Movies to exclude** or **Series to exclude** (see [Settings](settings.md)) skips all of the above: no measurement is read, no quality/language check runs, every one of its relations is pruned outright — the same end state as a title with zero winners, just decided without needing an answer from vod-probe first.
+
 ## The queue
 
 The plugin works through a queue. **Scan** puts a title in it when its set of relations is new or has changed; **Scan + Process** then takes it batch after batch (`batch_size` movies, `series_batch_size` series), selecting and pruning each title, until the queue is empty or you stop it. It runs in a background task, so the click returns at once; **Queue Status** tells you whether it is still running and how many titles remain.
 
 ## `.strm` files
 
-Dispatcharr's own API only serves one version, so for Emby and Jellyfin the plugin writes a `.strm` file per kept relation, pinned to that exact relation through Dispatcharr's proxy. See [.strm files and Emby](strm-and-emby.md).
+Dispatcharr's own API only serves one version, so for Emby and Jellyfin the plugin writes a `.strm` file per kept relation, pinned to that exact relation through Dispatcharr's proxy. See [.strm files and Emby / Jellyfin](strm-and-emby.md).

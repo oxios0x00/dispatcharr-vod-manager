@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Keeps one winner per configured quality tier from the measurements of the vod-probe plugin and prunes the rest — with optional .strm generation for real multi-version playback in Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -31,7 +31,7 @@
       "label": "Keep one version per quality tier",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language settings, but leaves every matching version in place, so Emby can still show them all. ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
+      "help_text": "OFF (default): every version in scope is kept — cleans up duplicates that don't match your quality/language settings, but leaves every matching version in place, so Emby/Jellyfin can still show them all. ON: only one winner per quality tier is kept (the fewest versions that cover Target languages), pruning the rest — the original behaviour. Leave both quality and language settings empty to keep literally everything."
     },
     {
       "id": "target_languages",
@@ -46,6 +46,26 @@
       "type": "boolean",
       "default": false,
       "help_text": "OFF (default): a tier with no matching language keeps its best-bitrate relation anyway. ON: that tier is dropped entirely — can leave a title with nothing kept if no tier matches."
+    },
+    {
+      "id": "_section_exclusions",
+      "label": "[EXCLUSIONS]",
+      "type": "info",
+      "description": "Permanently exclude specific titles by TMDB id, regardless of quality/language settings — for one unwanted or wrongly-matched title, without disabling its whole category or provider. An excluded title's relations are all pruned (subject to Dry run), the same as a title with zero winners: no measurement or quality/language check is needed, since nothing is being selected."
+    },
+    {
+      "id": "excluded_movie_tmdbids",
+      "label": "Movies to exclude (one TMDB id per line)",
+      "type": "text",
+      "default": "",
+      "help_text": "One entry per line: the movie's TMDB id, optionally followed by a free comment for your own reference (e.g. '603 wrong match for a similarly named film') — everything after the id is ignored. A line whose first token isn't a number is skipped. Movie and series TMDB ids are separate namespaces; this field only matches movies."
+    },
+    {
+      "id": "excluded_series_tmdbids",
+      "label": "Series to exclude (one TMDB id per line)",
+      "type": "text",
+      "default": "",
+      "help_text": "Same format as the movies field above, matched against the series' own TMDB id. A series with no TMDB id at all cannot be excluded this way."
     },
     {
       "id": "batch_size",
@@ -134,7 +154,7 @@
       "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder (not the files inside it — they'd all share the same id, so it would be pure redundancy) when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Turning this on renames every existing tagged folder on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
+      "help_text": "OFF (default): the folder is named from the title only, as before. ON: appends the Jellyfin/Emby external-id tag to the movie or series folder when the title has a TMDB or IMDB id, so the media server identifies it by id instead of guessing from text — falls back to the plain title when neither id is known. Every file name also repeats the tag: Jellyfin only recognises several files as versions of the same movie when each file name starts character-for-character with the folder name, tag included. Jellyfin has no version selector for episodes today regardless of naming, but episode files repeat the tag too so nothing needs renaming again if that's ever fixed upstream. Turning this on renames every existing tagged folder, and every file inside it, on the next Generate run (old paths are removed automatically, same as any other pruned relation) — a one-time, deliberate library-wide rename, not something to flip casually on a library your media server is actively using."
     },
     {
       "id": "strm_require_id",

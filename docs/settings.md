@@ -11,7 +11,16 @@ A setting you never saved uses its default: Dispatcharr fills unsaved fields wit
 | Exclude titles with none of the target qualities | OFF | ON drops a title entirely when none of its versions is in a quality you keep (for example a title that only exists in 720p when you keep `2160p,1080p`). OFF keeps its best available version. Turn Dry run ON first to see what it would remove. |
 | Target languages (`target_languages`) | `fre,eng` | ISO 639-2 codes. Empty means every version in scope is kept, language aside. |
 | Exclude relations matching none of the target languages | OFF | ON drops a tier whose versions match no target language at all, which can leave a title with nothing. This concerns **languages only**; for quality, see the row under Qualities to keep. |
-| Keep one version per quality tier | OFF | OFF (default): every version matching your quality/language settings is kept — cleanup only removes what falls outside them, so Emby can still show every matching version. ON: only the smallest set of versions covering `target_languages` is kept per tier (ties go to the higher bitrate) — the original, more aggressive cleanup. Leave both quality and language settings empty to keep literally everything vod-probe measured. |
+| Keep one version per quality tier | OFF | OFF (default): every version matching your quality/language settings is kept — cleanup only removes what falls outside them, so Emby/Jellyfin can still show every matching version. ON: only the smallest set of versions covering `target_languages` is kept per tier (ties go to the higher bitrate) — the original, more aggressive cleanup. Leave both quality and language settings empty to keep literally everything vod-probe measured. Beyond its effect on Emby/Jellyfin, turning this ON **and** targeting a single quality in `target_qualities` is also the only way to make a pure Xtream/IPTV player receive the version the plugin picked — see [Limitations](limitations.md) and [Concepts](concepts.md). With the default (OFF), or with several qualities targeted, more than one relation survives and Dispatcharr picks between them on its own. |
+
+## Exclusions
+
+| Setting | Default | What it does |
+|---|---|---|
+| Movies to exclude (`excluded_movie_tmdbids`) | empty | One TMDB id per line, optionally followed by a free comment (e.g. `603 wrong match`) — everything after the id is ignored. A listed movie is pruned entirely (subject to Dry run), bypassing quality/language settings and vod-probe measurement altogether: no waiting, no selection, every relation goes. |
+| Series to exclude (`excluded_series_tmdbids`) | empty | Same format, matched against the series' own TMDB id (a separate namespace from movies). A series with no TMDB id can't be excluded this way. |
+
+An excluded title's relations reappear, and get pruned again, the next time Dispatcharr's own VOD refresh re-imports them — same as any other pruned relation reappearing while its group stays enabled (see [Add or remove a group](add-or-remove-a-group.md)).
 
 ## Processing
 
@@ -35,7 +44,7 @@ A setting you never saved uses its default: Dispatcharr fills unsaved fields wit
 | Library root path | `/data/strm` | Where files are written, inside the container. |
 | Movies / Series subfolder | `movies` / `series` | Folder names under the root. |
 | Run .strm generation automatically with Scan + Process | OFF | Only affects the scheduled Scan + Process, never a manual click. |
-| Include `[tmdbid-…]` in the folder name | OFF | Tags the title folder for Emby/Jellyfin. Turning it on renames every tagged folder at the next Generate. |
+| Include `[tmdbid-…]` in the folder name | OFF | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions, and kept on episode files ready for whenever Jellyfin supports episode versions too. Turning it on renames every tagged folder, and every file inside it, at the next Generate. |
 | Skip titles with no TMDB/IMDB id | OFF | No `.strm` at all for those titles (and an existing one is removed). |
 
 ## Schedule
