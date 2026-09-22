@@ -19,4 +19,4 @@ Set the cron **a few minutes after Dispatcharr's VOD refresh**, and after vod-pr
 
 Leave the cron empty during a first import or against a large catalogue, and schedule only once you trust the picks. Choose an action that matches what you want to automate; the list includes Scan + Process (movies or series), the individual steps, Clean Titles, and both Generate actions.
 
-With **Run .strm generation automatically with Scan + Process** on, the scheduled Scan + Process also generates `.strm` files at the end; clicking Run by hand never does. Generate still refuses if a queue is not empty, so on a large catalogue a scheduled run may generate nothing until the queue is drained.
+With **Run .strm generation automatically with Scan + Process** on, Generate also runs at the end of every Scan + Process, scheduled or a manual Run click. Generate still refuses if a queue is not empty, so on a large catalogue this may generate nothing until the queue is drained.

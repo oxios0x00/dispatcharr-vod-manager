@@ -43,7 +43,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 | Dispatcharr base URL | empty | Baked into every `.strm`; must be reachable from your media server. |
 | Library root path | `/data/strm` | Where files are written, inside the container. |
 | Movies / Series subfolder | `movies` / `series` | Folder names under the root. |
-| Run .strm generation automatically with Scan + Process | OFF | Only affects the scheduled (cron) Scan + Process, never a manual Run click — a manual run can follow a fresh provider scan still being matched by Dispatcharr, and generating mid-match could write files for entries that are still incomplete. |
+| Run .strm generation automatically with Scan + Process | OFF | ON: Generate also runs at the end of every Scan + Process, manual click or scheduled. |
 | Include `[tmdbid-…]` in the folder name | ON | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions (episode grouping works differently, see [Limitations](limitations.md)). Flipping it either way renames every tagged folder, and every file inside it, at the next Generate. |
 | Skip titles with no TMDB/IMDB id | ON | No `.strm` at all for those titles (and an existing one is removed) — some providers never expose an id for certain content, confirmed happening for entire series catalogues on at least one provider, and a media server has nothing reliable to identify the file by regardless of the title text. OFF: it still gets a `.strm`, named from the raw provider title text. |
 

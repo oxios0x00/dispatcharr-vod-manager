@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -147,7 +147,7 @@
       "label": "Run .strm generation automatically with Scan + Process",
       "type": "boolean",
       "default": false,
-      "help_text": "OFF: only the Generate buttons write files. ON: the scheduled (cron) Scan + Process also generates afterward — a manual Run click never does."
+      "help_text": "OFF (default): only runs from the Generate buttons or its own scheduled action."
     },
     {
       "id": "strm_include_id_tag",

@@ -41,7 +41,7 @@ def message(text="ok"):
     return {"status": "ok", "message": text}
 
 
-def run_pipeline(plugin, process, settings=None, scheduled=False, generate=None):
+def run_pipeline(plugin, process, settings=None, generate=None):
     calls = []
 
     def scan(_settings):
@@ -49,7 +49,7 @@ def run_pipeline(plugin, process, settings=None, scheduled=False, generate=None)
         return message("scanned")
 
     return calls, plugin._run_pipeline(
-        "movie", "movies", settings or {"dry_run": False}, scheduled,
+        "movie", "movies", settings or {"dry_run": False},
         lambda _s: message("cleaned"), scan, process, generate or (lambda _s: message("generated")),
     )
 
@@ -137,7 +137,7 @@ def test_pipeline_refuses_to_start_while_another_run_is_live():
     with_plugin(run)
 
 
-def test_pipeline_generates_only_when_scheduled():
+def test_pipeline_generates_whenever_auto_generate_is_on():
     def run(plugin):
         generated = []
 
@@ -145,11 +145,10 @@ def test_pipeline_generates_only_when_scheduled():
             generated.append(1)
             return message("generated")
 
-        settings = {"dry_run": False, "auto_generate_strm": True}
         idle = lambda _s, _progress: {"status": "ok", "message": "Nothing queued.", "queue_empty": True}  # noqa: E731
-        run_pipeline(plugin, idle, settings, scheduled=False, generate=generate)
+        run_pipeline(plugin, idle, {"dry_run": False, "auto_generate_strm": False}, generate=generate)
         assert generated == []
-        run_pipeline(plugin, idle, settings, scheduled=True, generate=generate)
+        run_pipeline(plugin, idle, {"dry_run": False, "auto_generate_strm": True}, generate=generate)
         assert generated == [1]
 
     with_plugin(run)

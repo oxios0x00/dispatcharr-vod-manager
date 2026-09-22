@@ -48,7 +48,7 @@ class _WaitingForMeasurements(Exception):
 
 class Plugin:
     name = "VOD Manager"
-    version = "2.4.1"
+    version = "2.4.2"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -215,7 +215,7 @@ class Plugin:
             "label": "Run .strm generation automatically with Scan + Process",
             "type": "boolean",
             "default": False,
-            "help_text": "OFF: only the Generate buttons write files. ON: the scheduled (cron) Scan + Process also generates afterward — a manual Run click never does.",
+            "help_text": "OFF (default): only runs from the Generate buttons or its own scheduled action.",
         },
         {
             "id": "strm_include_id_tag",
@@ -476,7 +476,7 @@ class Plugin:
         if action_id == "scan_movies":
             return self._scan_movies(settings)
         if action_id == "scan_and_process":
-            return self._scan_and_process(settings, scheduled=scheduled)
+            return self._scan_and_process(settings)
         if action_id == "queue_status":
             return self._queue_status(CONTENT_TYPE_MOVIE)
         if action_id == "stop_queue":
@@ -484,7 +484,7 @@ class Plugin:
         if action_id == "scan_series":
             return self._scan_series(settings)
         if action_id == "scan_and_process_series":
-            return self._scan_and_process_series(settings, scheduled=scheduled)
+            return self._scan_and_process_series(settings)
         if action_id == "series_queue_status":
             return self._queue_status(CONTENT_TYPE_SERIES)
         if action_id == "catalog_stats":
@@ -665,7 +665,7 @@ class Plugin:
             ),
         }
 
-    def _run_pipeline(self, content_type, unit, settings, scheduled, clean, scan, process, generate):
+    def _run_pipeline(self, content_type, unit, settings, clean, scan, process, generate):
         """Scan, then process batches until the queue is empty, a stop is
         requested or a batch cannot start."""
         import logging
@@ -736,7 +736,7 @@ class Plugin:
                     f"{errored} {unit} in error, left alone until their relations change — "
                     "[MAINTENANCE] Retry Errored Titles puts them back in the queue."
                 )
-            if scheduled and settings.get("auto_generate_strm"):
+            if settings.get("auto_generate_strm"):
                 parts.append(generate(settings).get("message", ""))
             self._catalog_stats(settings)
             message = " | ".join(part for part in parts if part)
@@ -776,9 +776,9 @@ class Plugin:
         except Exception as exc:  # noqa: BLE001 - a notification must never fail the run
             logger.warning("Could not send the completion notification: %s", exc)
 
-    def _scan_and_process(self, settings, scheduled=False):
+    def _scan_and_process(self, settings):
         return self._run_pipeline(
-            CONTENT_TYPE_MOVIE, "movies", settings, scheduled,
+            CONTENT_TYPE_MOVIE, "movies", settings,
             self._clean_movie_titles, self._scan_movies,
             lambda settings, progress: self._process_batch(CONTENT_TYPE_MOVIE, settings, progress),
             self._generate_movie_strm,
@@ -1059,9 +1059,9 @@ class Plugin:
             "message": f"Scanned {scanned} series, enqueued {enqueued} new/changed.",
         }
 
-    def _scan_and_process_series(self, settings, scheduled=False):
+    def _scan_and_process_series(self, settings):
         return self._run_pipeline(
-            CONTENT_TYPE_SERIES, "series", settings, scheduled,
+            CONTENT_TYPE_SERIES, "series", settings,
             self._clean_series_titles, self._scan_series,
             lambda settings, progress: self._process_batch(CONTENT_TYPE_SERIES, settings, progress),
             self._generate_series_strm,
