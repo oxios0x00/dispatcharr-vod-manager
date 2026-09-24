@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.3"
+    version = "2.4.4"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -50,11 +50,22 @@ class Plugin(PipelineMixin, ScheduleMixin):
             ),
         },
         {
+            "id": "_section_settings",
+            "label": "[SETTINGS]",
+            "type": "info",
+            "description": (
+                "Changing any setting below only affects titles processed afterward, never "
+                "retroactively, and an already-pruned relation isn't recoverable from a setting "
+                "change alone. For a reliable result after a change, run [MAINTENANCE] Reset "
+                "Plugin State, then Scan + Process again from scratch."
+            ),
+        },
+        {
             "id": "target_qualities",
             "label": "Qualities to keep (one winner per tier)",
             "type": "string",
             "default": "2160p,1080p",
-            "help_text": "Comma-separated, best first. Empty = every tier. Falls back to the best available tier if none listed exist. Details: docs/settings.md.",
+            "help_text": "Comma-separated, best first. Empty = every tier. Falls back to the best available tier if none listed exist.",
         },
         {
             "id": "exclude_unmatched_quality",
@@ -68,7 +79,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "label": "Keep one version per quality tier",
             "type": "boolean",
             "default": False,
-            "help_text": "OFF (default): keep every matching version per tier. ON: one winner per tier (old, more aggressive behaviour). Details: docs/settings.md.",
+            "help_text": "OFF (default): keep every matching version per tier. ON: one winner per tier (old, more aggressive behaviour).",
         },
         {
             "id": "target_languages",
@@ -88,7 +99,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "id": "_section_exclusions",
             "label": "[EXCLUSIONS]",
             "type": "info",
-            "description": "Permanently exclude specific titles by TMDB id, regardless of the settings above. Details: docs/settings.md.",
+            "description": "Permanently exclude specific titles by TMDB id, regardless of the settings above.",
         },
         {
             "id": "excluded_movie_tmdbids",
@@ -116,7 +127,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "id": "_section_series",
             "label": "[SERIES]",
             "type": "info",
-            "description": "Same select/prune pipeline as Films, per episode, using the settings above. Details: docs/concepts.md.",
+            "description": "Same select/prune pipeline as Films, per episode, using the settings above.",
         },
         {
             "id": "series_batch_size",
@@ -154,7 +165,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "id": "_section_strm",
             "label": "[.STRM OUTPUT]",
             "type": "info",
-            "description": "Optional: writes one .strm per kept relation, for Emby/Jellyfin multi-version playback. Run order: Scan + Process until Queue Status is empty, then Generate. Details: docs/strm-and-emby.md.",
+            "description": "Optional: writes one .strm per kept relation, for Emby/Jellyfin multi-version playback. Run order: Scan + Process until Queue Status is empty, then Generate.",
         },
         {
             "id": "strm_dispatcharr_url",
@@ -195,7 +206,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "label": "Include [tmdbid-####] / [imdbid-ttXXXXXXX] in the movie/series folder name",
             "type": "boolean",
             "default": True,
-            "help_text": "ON (default): tags the folder and file names with the title's TMDB/IMDB id, for Emby/Jellyfin identification and Jellyfin's multi-version grouping. Flipping this renames the whole tagged tree on the next Generate. Details: docs/strm-and-emby.md.",
+            "help_text": "ON (default): tags the folder and file names with the title's TMDB/IMDB id, for Emby/Jellyfin identification and Jellyfin's multi-version grouping. Flipping this renames the whole tagged tree on the next Generate.",
         },
         {
             "id": "strm_require_id",
@@ -208,7 +219,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "id": "_section_schedule",
             "label": "[SCHEDULE]",
             "type": "info",
-            "description": "Runs one action on its own cron. Fill in the fields below, click Apply, then restart Dispatcharr once. Leave Schedule empty until you trust the picks. Details: docs/scheduling.md.",
+            "description": "Runs one action on its own cron. Fill in the fields below, click Apply, then restart Dispatcharr once. Leave Schedule empty until you trust the picks.",
         },
         {
             "id": "schedule_cron",
