@@ -16,10 +16,7 @@ Dispatcharr does expose a second, generic endpoint that *is*
 relation-aware: `/proxy/vod/<movie|series|episode>/<uuid>?stream_id=<id>`
 (`apps/proxy/vod_proxy/views.py`, `_parse_preferred_vod_params` +
 `stream_xc_*`'s `preferred_stream_id` matching against
-`relation.stream_id`). Two existing third-party plugins already rely on
-this for movies (`vod2mlib`'s `_build_proxy_url`, `emby-xtream`'s
-`StrmSyncService.cs` `GetVodMovieProvidersAsync` loop) — neither does it
-for episodes, which is the actual gap this module closes.
+`relation.stream_id`).
 
 `stream_id` here is the relation's own `stream_id` *field* (the
 provider's raw id), not the Django row's primary key — confirmed against
