@@ -2,13 +2,14 @@
 since Dispatcharr has no scheduling API for plugins (verified in
 apps/plugins/loader.py — no schedule-related method). Dispatcharr itself
 runs on Celery + django-celery-beat internally (M3U/EPG refresh, backups),
-so a plugin can register its own PeriodicTask directly, same pattern as the
-real, published vod2mlib plugin.
+so a plugin can register its own PeriodicTask directly.
 
 A mixin, combined into Plugin alongside PipelineMixin — see pipeline.py's
 module docstring for why.
 """
 import json
+
+from .pipeline import _system_timezone_name
 
 
 class ScheduleMixin:
@@ -42,7 +43,9 @@ class ScheduleMixin:
     def _apply_schedule(self, settings):
         cron_expr = settings.get("schedule_cron") or "0 */6 * * *"
         target = settings.get("schedule_target") or "scan_and_process"
-        tz_str = (settings.get("schedule_timezone") or "").strip() or "UTC"
+        # Same time zone Dispatcharr's own scheduled tasks use
+        # (core/scheduling.py) — Settings > System, not a plugin setting.
+        tz_str = _system_timezone_name()
 
         if target not in self._VALID_SCHEDULE_TARGETS:
             return {"status": "error", "message": f"Invalid schedule_target: {target}"}
@@ -51,14 +54,6 @@ class ScheduleMixin:
             minute, hour, dom, month, dow = self._parse_cron(cron_expr)
         except ValueError as e:
             return {"status": "error", "message": str(e)}
-
-        try:
-            import pytz
-
-            if tz_str not in pytz.all_timezones_set:
-                return {"status": "error", "message": f"Unknown timezone: {tz_str}"}
-        except ImportError:
-            pass  # pytz not available: skip the friendly check, let CrontabSchedule validate
 
         try:
             from django_celery_beat.models import PeriodicTask, CrontabSchedule

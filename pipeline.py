@@ -31,6 +31,32 @@ def _parse_csv_list(value):
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
+def _system_timezone_name():
+    """Dispatcharr's own configured system time zone (Settings > System),
+    the same one it uses for its own scheduled tasks (core/scheduling.py)."""
+    try:
+        from core.models import CoreSettings
+
+        return CoreSettings.get_system_time_zone() or "UTC"
+    except Exception:
+        return "UTC"
+
+
+def _format_local_now():
+    """Current time in Dispatcharr's configured system time zone, so a
+    notification states unambiguously when its run actually happened —
+    needed once more than one schedule/content type can finish close
+    together and the notification list alone doesn't make that clear."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    try:
+        tz = ZoneInfo(_system_timezone_name())
+    except Exception:
+        tz = None
+    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+
+
 class _WaitingForMeasurements(Exception):
     """A title has a relation vod-probe has not measured yet."""
 
@@ -237,7 +263,7 @@ class PipelineMixin:
                 notification_type=kind.WARNING if stopped else kind.INFO,
                 priority=SystemNotification.Priority.HIGH,
                 title=title or f"VOD Manager: {unit} {'stopped' if stopped else 'done'}",
-                message=message,
+                message=f"[{_format_local_now()}] {message}",
                 is_active=True,
                 admin_only=True,
             )

@@ -218,14 +218,6 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "help_text": "'minute hour day-of-month month day-of-week'. Empty falls back to every 6 hours when Apply is clicked. Best set a few minutes after Dispatcharr's VOD refresh and vod-probe.",
         },
         {
-            "id": "schedule_timezone",
-            "label": "Schedule timezone",
-            "type": "string",
-            "default": "",
-            "placeholder": "Europe/Paris",
-            "help_text": "IANA timezone name. Leave empty to use UTC.",
-        },
-        {
             "id": "schedule_target",
             "label": "Scheduled action",
             "type": "select",
