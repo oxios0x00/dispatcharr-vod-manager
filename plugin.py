@@ -428,9 +428,16 @@ class Plugin(PipelineMixin, ScheduleMixin):
     def __init__(self):
         from .store import Store
 
+        # A sibling of this plugin's own folder under Dispatcharr's plugins
+        # directory, not a subfolder of it: updating a plugin replaces only
+        # its own folder (apps/plugins/api_views.py's install/overwrite path
+        # renames it to a backup and deletes that backup once the new
+        # version is in place) — a sibling folder is untouched by that swap,
+        # so the queue, known relations, .strm manifest and run history all
+        # survive an update instead of silently resetting.
         data_dir = os.environ.get(
             "VOD_MANAGER_DATA_DIR",
-            os.path.join(os.path.dirname(__file__), "data"),
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "vod_manager_data"),
         )
         self.store = Store(data_dir)
 

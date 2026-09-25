@@ -39,7 +39,7 @@ Keep **Dry run** ON and the batch size small, then: **Scan + Process** (it runs 
 
 ## Data location
 
-State lives in `<plugin folder>/data/state.sqlite3` by default (override with the `VOD_MANAGER_DATA_DIR` env var). It holds the processing queue, the known relations, the `.strm` manifest and the run history — nothing here is tracked by Dispatcharr's own database or migrations.
+State lives in `vod_manager_data/state.sqlite3`, a sibling of this plugin's own folder under Dispatcharr's plugins directory (override with the `VOD_MANAGER_DATA_DIR` env var). It holds the processing queue, the known relations, the `.strm` manifest and the run history — nothing here is tracked by Dispatcharr's own database or migrations. Deliberately kept outside the plugin's own folder: updating a plugin replaces that folder entirely, and Dispatcharr has no separate persistent-data location for a plugin — a sibling folder survives an update untouched, a subfolder wouldn't.
 
 ## License
 

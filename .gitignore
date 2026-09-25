@@ -1,5 +1,9 @@
-# Per-install runtime state (probe cache, queue, run log) — never source
+# Per-install runtime state (probe cache, queue, run log) — never source.
+# Lives one level up from this repo when deployed (sibling of the plugin's
+# own folder under Dispatcharr's plugins directory), but a local checkout
+# run with VOD_MANAGER_DATA_DIR unset can still create it here.
 data/
+vod_manager_data/
 
 # Python
 __pycache__/
