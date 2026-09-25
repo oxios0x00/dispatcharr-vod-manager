@@ -59,3 +59,9 @@ def test_series_ready_accepts_error_as_a_final_answer():
     # failed, instead of leaving it "pending" forever — a series like that
     # is done being decided, not still waiting.
     assert measurements.series_ready(props(status="error"))
+
+
+def test_series_ready_accepts_partial_as_a_final_answer():
+    # vod-probe writes "partial" when some seasons answered and one or more
+    # are confirmed dead — also done deciding, even though it's a mix.
+    assert measurements.series_ready(props(status="partial"))
