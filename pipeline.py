@@ -448,7 +448,8 @@ class PipelineMixin:
             .select_related("movie")
         )
         if not relations:
-            self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set())
+            if not dry_run:
+                self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set())
             return 0
 
         if excluded_tmdbids and str(relations[0].movie.tmdb_id) in excluded_tmdbids:
@@ -477,7 +478,10 @@ class PipelineMixin:
         loser_ids = all_ids - winner_ids
 
         if dry_run:
-            self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, all_ids)
+            # A dry run writes nothing, including to the plugin's own
+            # bookkeeping: recording all_ids here used to make this title
+            # look "already handled" to the next scan, so turning dry_run
+            # off and running again silently reprocessed nothing.
             return len(loser_ids)
 
         if loser_ids:
@@ -544,7 +548,8 @@ class PipelineMixin:
             .select_related("series")
         )
         if not series_relations:
-            self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set())
+            if not dry_run:
+                self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set())
             return 0
 
         excluded = bool(excluded_tmdbids) and str(series_relations[0].series.tmdb_id) in excluded_tmdbids
@@ -591,7 +596,12 @@ class PipelineMixin:
 
             loser_ids = set().union(*decisions) if decisions else set()
 
-        if loser_ids and not dry_run:
+        if dry_run:
+            # A dry run writes nothing, including to the plugin's own
+            # bookkeeping — same reasoning as _process_one_movie.
+            return len(loser_ids)
+
+        if loser_ids:
             M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete()
 
         self.store.set_known_relation_ids(
