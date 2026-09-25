@@ -176,3 +176,12 @@ def write_strm_if_changed(path, content):
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return "created"
+
+
+def write_strm(path, content, dry_run):
+    """The only entry point a caller should use: decides itself whether to
+    actually write or only predict, so dry_run can't be forgotten at a call
+    site the way it was before — every .strm write in this plugin goes
+    through here, not through write_strm_if_changed/predict_strm_write
+    directly."""
+    return predict_strm_write(path, content) if dry_run else write_strm_if_changed(path, content)

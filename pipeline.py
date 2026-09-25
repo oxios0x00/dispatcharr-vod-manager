@@ -335,6 +335,20 @@ class PipelineMixin:
     # nobody has looked at yet is never mistaken for a loser. A title that is
     # not ready waits and is tried again at the next run.
 
+    def _apply_prune(self, dry_run, delete_fn, remember_fn):
+        """The only place a prune decision becomes real: a no-op when
+        dry_run, otherwise deletes the losers and remembers what's left.
+        Both movie and series processing go through this instead of each
+        keeping their own `if dry_run` — two separate copies of that
+        check is exactly how a dry run once deleted nothing but still
+        updated known_relations, silently blocking the next real run,
+        and how Generate once wrote real files during a dry run despite
+        looking like it respected the setting."""
+        if dry_run:
+            return
+        delete_fn()
+        remember_fn()
+
     def _remember_failed_relations(self, content_type, content_id, relation_model, id_field):
         """Record the relation ids a title failed with. They are otherwise
         only recorded on success, so a title that always fails looked new on
@@ -448,8 +462,10 @@ class PipelineMixin:
             .select_related("movie")
         )
         if not relations:
-            if not dry_run:
-                self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set())
+            self._apply_prune(
+                dry_run, lambda: None,
+                lambda: self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, set()),
+            )
             return 0
 
         if excluded_tmdbids and str(relations[0].movie.tmdb_id) in excluded_tmdbids:
@@ -477,16 +493,11 @@ class PipelineMixin:
         all_ids = {r.id for r in relations}
         loser_ids = all_ids - winner_ids
 
-        if dry_run:
-            # A dry run writes nothing, including to the plugin's own
-            # bookkeeping: recording all_ids here used to make this title
-            # look "already handled" to the next scan, so turning dry_run
-            # off and running again silently reprocessed nothing.
-            return len(loser_ids)
-
-        if loser_ids:
-            M3UMovieRelation.objects.filter(id__in=loser_ids).delete()
-        self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, winner_ids)
+        self._apply_prune(
+            dry_run,
+            lambda: M3UMovieRelation.objects.filter(id__in=loser_ids).delete() if loser_ids else None,
+            lambda: self.store.set_known_relation_ids(CONTENT_TYPE_MOVIE, movie_id, winner_ids),
+        )
         return len(loser_ids)
 
     # --- series: scan / enqueue ------------------------------------------
@@ -548,8 +559,10 @@ class PipelineMixin:
             .select_related("series")
         )
         if not series_relations:
-            if not dry_run:
-                self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set())
+            self._apply_prune(
+                dry_run, lambda: None,
+                lambda: self.store.set_known_relation_ids(CONTENT_TYPE_SERIES, series_id, set()),
+            )
             return 0
 
         excluded = bool(excluded_tmdbids) and str(series_relations[0].series.tmdb_id) in excluded_tmdbids
@@ -596,16 +609,12 @@ class PipelineMixin:
 
             loser_ids = set().union(*decisions) if decisions else set()
 
-        if dry_run:
-            # A dry run writes nothing, including to the plugin's own
-            # bookkeeping — same reasoning as _process_one_movie.
-            return len(loser_ids)
-
-        if loser_ids:
-            M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete()
-
-        self.store.set_known_relation_ids(
-            CONTENT_TYPE_SERIES, series_id, {r.id for r in series_relations}
+        self._apply_prune(
+            dry_run,
+            lambda: M3UEpisodeRelation.objects.filter(id__in=loser_ids).delete() if loser_ids else None,
+            lambda: self.store.set_known_relation_ids(
+                CONTENT_TYPE_SERIES, series_id, {r.id for r in series_relations}
+            ),
         )
         return len(loser_ids)
 

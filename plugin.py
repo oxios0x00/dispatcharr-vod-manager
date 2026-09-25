@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.7"
+    version = "2.4.8"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -721,7 +721,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
         try:
             from apps.vod.models import M3UMovieRelation
             from . import measurements
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm
 
             blocker = self._generate_blocker(CONTENT_TYPE_MOVIE, settings)
             if blocker:
@@ -770,7 +770,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     path = os.path.join(movie_dir, f"{folder_name}{suffix}.strm")
                     url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
                     try:
-                        result = predict_strm_write(path, url) if dry_run else write_strm_if_changed(path, url)
+                        result = write_strm(path, url, dry_run)
                     except OSError:
                         errors += 1
                         continue
@@ -815,7 +815,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             from apps.vod.models import M3UEpisodeRelation
 
             from . import measurements
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm
 
             blocker = self._generate_blocker(CONTENT_TYPE_SERIES, settings)
             if blocker:
@@ -871,7 +871,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
                     url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
                     try:
-                        result = predict_strm_write(path, url) if dry_run else write_strm_if_changed(path, url)
+                        result = write_strm(path, url, dry_run)
                     except OSError:
                         errors += 1
                         continue
