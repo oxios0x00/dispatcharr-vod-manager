@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from strm import build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+from strm import build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
 
 
 def test_sanitize_filename_strips_invalid_characters():
@@ -128,6 +128,31 @@ def test_write_strm_if_changed_updates_when_content_differs(tmp_path):
     assert result == "updated"
     with open(path) as f:
         assert f.read() == "http://example/movie/2.mkv"
+
+
+def test_predict_strm_write_reports_created_without_writing(tmp_path):
+    path = os.path.join(str(tmp_path), "sub", "movie.strm")
+    result = predict_strm_write(path, "http://example/movie/1.mkv")
+    assert result == "created"
+    assert not os.path.exists(path)
+
+
+def test_predict_strm_write_reports_unchanged_without_writing(tmp_path):
+    path = os.path.join(str(tmp_path), "movie.strm")
+    write_strm_if_changed(path, "http://example/movie/1.mkv")
+    mtime_before = os.path.getmtime(path)
+    result = predict_strm_write(path, "http://example/movie/1.mkv")
+    assert result == "unchanged"
+    assert os.path.getmtime(path) == mtime_before
+
+
+def test_predict_strm_write_reports_updated_without_writing(tmp_path):
+    path = os.path.join(str(tmp_path), "movie.strm")
+    write_strm_if_changed(path, "http://example/movie/1.mkv")
+    result = predict_strm_write(path, "http://example/movie/2.mkv")
+    assert result == "updated"
+    with open(path) as f:
+        assert f.read() == "http://example/movie/1.mkv"
 
 
 def test_remove_stale_files_deletes_file_and_empty_parent(tmp_path):

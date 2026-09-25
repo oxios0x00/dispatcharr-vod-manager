@@ -149,15 +149,25 @@ def remove_stale_files(paths, stop_dir):
     return removed
 
 
+def predict_strm_write(path, content):
+    """What write_strm_if_changed would do, without touching the file —
+    the dry-run path for .strm generation. Reads the same way, just never
+    opens the file for writing."""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return "unchanged" if f.read() == content else "updated"
+    return "created"
+
+
 def write_strm_if_changed(path, content):
     """Writes `content` to `path` only if missing or different, so an
     unrelated regeneration run doesn't bump every file's mtime and force
     a full media-server rescan. Returns 'created', 'updated' or
     'unchanged'."""
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            if f.read() == content:
-                return "unchanged"
+    kind = predict_strm_write(path, content)
+    if kind == "unchanged":
+        return "unchanged"
+    if kind == "updated":
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         return "updated"

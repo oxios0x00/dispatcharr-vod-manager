@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.6"
+    version = "2.4.7"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -721,11 +721,12 @@ class Plugin(PipelineMixin, ScheduleMixin):
         try:
             from apps.vod.models import M3UMovieRelation
             from . import measurements
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             blocker = self._generate_blocker(CONTENT_TYPE_MOVIE, settings)
             if blocker:
                 return blocker
+            dry_run = bool(settings.get("dry_run", True))
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
             subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
@@ -769,7 +770,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     path = os.path.join(movie_dir, f"{folder_name}{suffix}.strm")
                     url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
                     try:
-                        result = write_strm_if_changed(path, url)
+                        result = predict_strm_write(path, url) if dry_run else write_strm_if_changed(path, url)
                     except OSError:
                         errors += 1
                         continue
@@ -787,11 +788,15 @@ class Plugin(PipelineMixin, ScheduleMixin):
             # id" — safe to remove precisely because we tracked writing it
             # ourselves, unlike scanning the folder for "any .strm".
             stale = self.store.get_strm_manifest(CONTENT_TYPE_MOVIE) - current_paths
-            removed = remove_stale_files(stale, stop_dir=library_dir)
-            self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
+            if dry_run:
+                removed = len(stale)
+            else:
+                removed = remove_stale_files(stale, stop_dir=library_dir)
+                self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
 
+            prefix = "Would: " if dry_run else ""
             msg = (
-                f"{created} created, {updated} updated, {unchanged} unchanged, "
+                f"{prefix}{created} created, {updated} updated, {unchanged} unchanged, "
                 f"{removed} removed across {len(by_movie)} movies."
             )
             if skipped_no_id:
@@ -810,11 +815,12 @@ class Plugin(PipelineMixin, ScheduleMixin):
             from apps.vod.models import M3UEpisodeRelation
 
             from . import measurements
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm_if_changed
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
 
             blocker = self._generate_blocker(CONTENT_TYPE_SERIES, settings)
             if blocker:
                 return blocker
+            dry_run = bool(settings.get("dry_run", True))
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
             subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
@@ -865,7 +871,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
                     url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
                     try:
-                        result = write_strm_if_changed(path, url)
+                        result = predict_strm_write(path, url) if dry_run else write_strm_if_changed(path, url)
                     except OSError:
                         errors += 1
                         continue
@@ -878,11 +884,15 @@ class Plugin(PipelineMixin, ScheduleMixin):
                         unchanged += 1
 
             stale = self.store.get_strm_manifest(CONTENT_TYPE_EPISODE) - current_paths
-            removed = remove_stale_files(stale, stop_dir=library_dir)
-            self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
+            if dry_run:
+                removed = len(stale)
+            else:
+                removed = remove_stale_files(stale, stop_dir=library_dir)
+                self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
 
+            prefix = "Would: " if dry_run else ""
             msg = (
-                f"{created} created, {updated} updated, {unchanged} unchanged, "
+                f"{prefix}{created} created, {updated} updated, {unchanged} unchanged, "
                 f"{removed} removed across {len(series_seen)} series."
             )
             if series_skipped_no_id:
