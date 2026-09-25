@@ -12,7 +12,7 @@ A run renews its lock after every batch. If Dispatcharr is restarted in the midd
 
 ## Generate refuses to run
 
-Its queue still has `pending` or `in_progress` items. Let Scan + Process finish (or wait for it) until Queue Status reads `0 pending, 0 in progress`. Titles in `error` do not block it.
+Its queue still has `pending` or `in_progress` items. Let Scan + Process finish (or wait for it) until Queue Status reads `0 pending, 0 in progress`. Titles in `error` do not block it. This guard exists because generating while the queue is still open would give still-unmeasured titles a `- unprobed` filename and write a file for a relation that's about to be pruned, only for it to disappear on the next Generate run.
 
 ## Titles stay `waiting`
 

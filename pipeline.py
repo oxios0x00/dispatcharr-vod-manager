@@ -175,19 +175,18 @@ class PipelineMixin:
                 "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS, renewed=True
             )
         try:
-            parts = []
             # Holding the lock means no other run is working this queue, so
             # anything still in progress was cut short by a restart.
             recovered = self.store.requeue_in_progress(content_type)
-            if recovered:
-                parts.append(f"Recovered {recovered} {unit} left in progress by an interrupted run.")
+            recovered_msg = (
+                f"Recovered {recovered} {unit} left in progress by an interrupted run." if recovered else ""
+            )
             # Titles that were waiting for vod-probe get another chance now.
             self.store.requeue_waiting(content_type)
             # A stop asked for while nothing ran must not cancel this run.
             self.store.clear_stop(content_type)
-            if settings.get("auto_clean_titles"):
-                parts.append(clean(settings).get("message", ""))
-            parts.append(scan(settings).get("message", ""))
+            clean_msg = clean(settings).get("message", "") if settings.get("auto_clean_titles") else ""
+            scan_msg = scan(settings).get("message", "")
 
             totals = {"processed": 0, "errors": 0, "pruned": 0}
             stop_message = ""
@@ -211,29 +210,30 @@ class PipelineMixin:
                     totals[key] += result[key]
 
             dry_run = bool(settings.get("dry_run", True))
-            parts.append(
+            processed_msg = (
                 f"Processed {totals['processed']} {unit} ({totals['errors']} errors), "
                 f"{'would prune' if dry_run else 'pruned'} {totals['pruned']}."
             )
             if stopped:
-                parts.append("Stopped on request; run Scan + Process again to carry on.")
+                stopped_msg = "Stopped on request; run Scan + Process again to carry on."
             elif stop_message and not queue_empty:
-                parts.append(stop_message)
+                stopped_msg = stop_message
+            else:
+                stopped_msg = ""
             counts = self.store.queue_counts(content_type)
-            if counts["waiting"]:
-                parts.append(
-                    f"{counts['waiting']} {unit} waiting for vod-probe to measure them: check that "
-                    "vod-probe is installed and has run, then run Scan + Process again."
-                )
+            waiting_msg = f"{counts['waiting']} {unit} waiting for vod-probe." if counts["waiting"] else ""
             errored = counts["error"]
-            if errored:
-                parts.append(
-                    f"{errored} {unit} in error, left alone until their relations change — "
-                    "[MAINTENANCE] Retry Errored Titles puts them back in the queue."
-                )
-            if settings.get("auto_generate_strm"):
-                parts.append(generate(settings).get("message", ""))
+            errored_msg = f"{errored} {unit} in error (Retry Errored Titles)." if errored else ""
+            generate_msg = generate(settings).get("message", "") if settings.get("auto_generate_strm") else ""
             self._catalog_stats(settings)
+            # The bell notification clamps to 5 wrapped lines with no way to
+            # expand (Mantine Text lineClamp) — put the outcome that matters
+            # most first, background/context last, so a clamp only ever
+            # hides the least important part.
+            parts = [
+                recovered_msg, processed_msg, stopped_msg, waiting_msg, errored_msg,
+                clean_msg, scan_msg, generate_msg,
+            ]
             message = " | ".join(part for part in parts if part)
             logger.info("Scan + Process (%s) finished: %s", content_type, message)
             self._notify_run_finished(

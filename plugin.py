@@ -522,11 +522,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 "status": "error",
                 "message": (
                     f"{queue['pending']} {'movie(s)' if content_type == CONTENT_TYPE_MOVIE else 'series'} pending, "
-                    f"{queue['in_progress']} in progress, {queue['waiting']} waiting for vod-probe — "
-                    f"finish Scan + Process first ({queue_name} should read 0 pending, 0 in "
-                    "progress and 0 waiting). Generating now would give still-unmeasured titles a '- unprobed' "
-                    "filename and write a file for a relation that's about to be pruned, only for "
-                    "it to disappear on the next Generate run."
+                    f"{queue['in_progress']} in progress, {queue['waiting']} waiting — "
+                    f"finish Scan + Process first ({queue_name})."
                 ),
             }
         return None
@@ -577,8 +574,11 @@ class Plugin(PipelineMixin, ScheduleMixin):
         return self._clean_titles_for_model(Series, settings, "series", "series")
 
     def _clean_titles_for_model(self, model_cls, settings, noun_singular, noun_plural):
+        import logging
+
         from .title_cleanup import parse_tag_list, strip_title_tags
 
+        logger = logging.getLogger("vod_manager.title_cleanup")
         tags = parse_tag_list(settings.get("title_cleanup_tags"))
         dry_run = bool(settings.get("dry_run", True))
         if not tags:
@@ -615,12 +615,13 @@ class Plugin(PipelineMixin, ScheduleMixin):
 
         verb = "would rename" if dry_run else "renamed"
         noun = noun_singular if changed == 1 else noun_plural
-        msg = f"{verb} {changed} {noun}."
+        msg = f"{verb} {changed} {noun}"
         if skipped_no_id:
-            msg += f" Skipped {skipped_no_id} with no TMDB/IMDB id (rename would break Dispatcharr's own dedup on next provider scan)."
+            msg += f", {skipped_no_id} skipped (no TMDB/IMDB id)"
+        msg += "."
         if examples:
-            msg += " e.g. " + "; ".join(examples)
-        return {"status": "ok", "message": msg}
+            logger.info("%s %s: %s", verb, noun, "; ".join(examples))
+        return {"status": "ok", "message": msg, "changed": changed, "skipped_no_id": skipped_no_id}
 
     # --- catalog stats (quality/language composition over time) ---------
 
