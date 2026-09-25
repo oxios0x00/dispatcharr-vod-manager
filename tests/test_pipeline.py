@@ -65,7 +65,7 @@ def test_pipeline_processes_batches_until_the_queue_is_empty():
         calls, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
         assert batches == []
         assert calls == ["scan"]
-        assert "Processed 40 movies (2 errors), pruned 6." in result["message"]
+        assert "Processed 40 (2 err), pruned 6." in result["message"]
         assert "Nothing queued" not in result["message"]
         # The lock is released so the next click can start.
         assert plugin.store.lock_held_since("scan_and_process_movie") is None
@@ -180,8 +180,7 @@ def test_pipeline_tells_how_many_titles_are_left_in_error():
         plugin.store.mark_error("movie", 1, "boom")
         idle = lambda _s, _progress: {"status": "ok", "message": "Nothing queued.", "queue_empty": True}  # noqa: E731
         _, result = run_pipeline(plugin, idle)
-        assert "1 movies in error" in result["message"]
-        assert "Retry Errored Titles" in result["message"]
+        assert "1 in error." in result["message"]
 
     with_plugin(run)
 
@@ -251,7 +250,7 @@ def test_pipeline_goes_on_after_a_batch_made_only_of_waiting_titles():
         ]
         _, result = run_pipeline(plugin, lambda _s, _progress: batches.pop(0))
         assert batches == []
-        assert "Processed 3 movies (0 errors), pruned 2." in result["message"]
+        assert "Processed 3 (0 err), pruned 2." in result["message"]
 
     with_plugin(run)
 
@@ -274,6 +273,6 @@ def test_pipeline_gives_waiting_titles_another_chance_and_reports_the_ones_still
 
         _, result = run_pipeline(plugin, process)
         assert seen["counts"]["pending"] == 1 and seen["counts"]["waiting"] == 0
-        assert "1 movies waiting for vod-probe" in result["message"]
+        assert "1 waiting on vod-probe" in result["message"]
 
     with_plugin(run)

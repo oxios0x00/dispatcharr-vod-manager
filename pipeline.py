@@ -189,7 +189,11 @@ class PipelineMixin:
             self.store.requeue_waiting(content_type)
             # A stop asked for while nothing ran must not cancel this run.
             self.store.clear_stop(content_type)
-            clean_msg = clean(settings).get("message", "") if settings.get("auto_clean_titles") else ""
+            # Only worth a line in the notification when it actually renamed
+            # something — the skipped-count otherwise repeats unchanged on
+            # every single run and crowds out the parts that vary.
+            clean_result = clean(settings) if settings.get("auto_clean_titles") else None
+            clean_msg = clean_result.get("message", "") if clean_result and clean_result.get("changed") else ""
             scan_msg = scan(settings).get("message", "")
 
             totals = {"processed": 0, "errors": 0, "pruned": 0}
@@ -215,19 +219,22 @@ class PipelineMixin:
 
             dry_run = bool(settings.get("dry_run", True))
             processed_msg = (
-                f"Processed {totals['processed']} {unit} ({totals['errors']} errors), "
+                f"Processed {totals['processed']} ({totals['errors']} err), "
                 f"{'would prune' if dry_run else 'pruned'} {totals['pruned']}."
             )
             if stopped:
-                stopped_msg = "Stopped on request; run Scan + Process again to carry on."
+                stopped_msg = "Stopped on request; run again to carry on."
             elif stop_message and not queue_empty:
                 stopped_msg = stop_message
             else:
                 stopped_msg = ""
             counts = self.store.queue_counts(content_type)
-            waiting_msg = f"{counts['waiting']} {unit} waiting for vod-probe." if counts["waiting"] else ""
+            waiting_msg = f"{counts['waiting']} waiting on vod-probe." if counts["waiting"] else ""
             errored = counts["error"]
-            errored_msg = f"{errored} {unit} in error (Retry Errored Titles)." if errored else ""
+            # Full detail (why, how to retry) lives in docs/troubleshooting.md
+            # "Titles in error" — repeating it here every run only pushed out
+            # parts of the message that actually change.
+            errored_msg = f"{errored} in error." if errored else ""
             generate_msg = generate(settings).get("message", "") if settings.get("auto_generate_strm") else ""
             self._catalog_stats(settings)
             # The bell notification clamps to 5 wrapped lines with no way to
@@ -324,7 +331,7 @@ class PipelineMixin:
 
         return {
             "status": "ok",
-            "message": f"Scanned {scanned} movies, enqueued {enqueued} new/changed.",
+            "message": f"Scanned {scanned}, {enqueued} new/changed.",
         }
 
     # --- process ------------------------------------------------------------
@@ -525,7 +532,7 @@ class PipelineMixin:
 
         return {
             "status": "ok",
-            "message": f"Scanned {scanned} series, enqueued {enqueued} new/changed.",
+            "message": f"Scanned {scanned}, {enqueued} new/changed.",
         }
 
     def _scan_and_process_series(self, settings):

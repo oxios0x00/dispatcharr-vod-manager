@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.10"
+    version = "2.4.11"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -795,14 +795,11 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
 
             prefix = "Would: " if dry_run else ""
-            msg = (
-                f"{prefix}{created} created, {updated} updated, {unchanged} unchanged, "
-                f"{removed} removed across {len(by_movie)} movies."
-            )
+            msg = f"{prefix}{created} new, {updated} updated, {removed} removed ({len(by_movie)} movies)."
             if skipped_no_id:
-                msg += f" {skipped_no_id} movie(s) skipped (no TMDB/IMDB id)."
+                msg += f" {skipped_no_id} skipped (no id)."
             if errors:
-                msg += f" {errors} file write error(s) — check the path is writable."
+                msg += f" {errors} write error(s)."
             return {"status": "ok", "message": msg}
         finally:
             self.store.release_lock("generate_movie_strm")
@@ -891,14 +888,11 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
 
             prefix = "Would: " if dry_run else ""
-            msg = (
-                f"{prefix}{created} created, {updated} updated, {unchanged} unchanged, "
-                f"{removed} removed across {len(series_seen)} series."
-            )
+            msg = f"{prefix}{created} new, {updated} updated, {removed} removed ({len(series_seen)} series)."
             if series_skipped_no_id:
-                msg += f" {len(series_skipped_no_id)} series skipped (no TMDB/IMDB id)."
+                msg += f" {len(series_skipped_no_id)} skipped (no id)."
             if errors:
-                msg += f" {errors} file write error(s) — check the path is writable."
+                msg += f" {errors} write error(s)."
             return {"status": "ok", "message": msg}
         finally:
             self.store.release_lock("generate_series_strm")
