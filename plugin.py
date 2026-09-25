@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.8"
+    version = "2.4.9"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "

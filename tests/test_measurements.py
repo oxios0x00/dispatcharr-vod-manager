@@ -52,3 +52,10 @@ def test_series_ready_needs_a_complete_summary():
     assert measurements.series_ready(props(status="ok", episodes=8))
     assert not measurements.series_ready(props(status="pending"))
     assert not measurements.series_ready(None)
+
+
+def test_series_ready_accepts_error_as_a_final_answer():
+    # vod-probe writes "error" for a series version whose every episode
+    # failed, instead of leaving it "pending" forever — a series like that
+    # is done being decided, not still waiting.
+    assert measurements.series_ready(props(status="error"))

@@ -61,8 +61,16 @@ def bitrate(custom_properties):
     return found.get("bit_rate") or (found.get("video") or {}).get("bit_rate")
 
 
+_SERIES_DONE_STATUSES = ("ok", "error")
+
+
 def series_ready(custom_properties):
-    """Whether vod-probe has finished with a series version: its summary says
-    the episodes were loaded and every one has an answer."""
+    """Whether vod-probe is done deciding about this series version — "ok"
+    (a real result) or "error" (tried, every episode failed) both count as
+    done; only "pending" (not looked at yet, or not finished) means keep
+    waiting. Before vod-probe's schema addition of "error" for this summary,
+    a series whose every episode failed stayed "pending" forever, which
+    looked identical to "not measured yet" and left the series waiting with
+    no way out."""
     found = block(custom_properties)
-    return bool(found) and found.get("status") == "ok"
+    return bool(found) and found.get("status") in _SERIES_DONE_STATUSES
