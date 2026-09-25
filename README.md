@@ -12,7 +12,7 @@ Everything defaults to the safe choice: Dry run is ON, cleanup keeps every match
 
 ## Status
 
-Exercised against a real Dispatcharr test instance, not just unit-tested: vod-probe-driven selection, per-title exclusion, and `.strm` generation (including the Jellyfin-compatible naming) have all been run for real, dry-run and with actual file writes. Live (destructive) pruning on this vod-probe-based architecture specifically has only been dry-run so far — validate with Dry run ON on your own catalogue before turning it off, as [First import](docs/first-import.md) walks through.
+In production since 2026-09-25, replacing the pre-vod-probe 1.3.0 plugin: vod-probe-driven selection, per-title exclusion, and `.strm` generation (including the Jellyfin-compatible naming) have all been run for real, including live (destructive) pruning of movie and series relations. Still worth validating with Dry run ON on your own catalogue first, as [First import](docs/first-import.md) walks through.
 
 ## Install
 
@@ -24,7 +24,7 @@ After installing or updating the plugin, restart Dispatcharr once.
 
 ## Quick start
 
-Keep **Dry run** ON and the batch size small, then: **Scan + Process** (it runs in the background until the queue is empty; follow it with **Queue Status**), check the picks, turn Dry run OFF, **Clean Titles**, **Generate .strm Files**. Same for series with the `[SERIES]` actions. The full walkthrough is in [First import](docs/first-import.md).
+Keep **Dry run** ON and the batch size small, then: **Scan + Process** (it runs in the background until the queue is empty; follow it with **Queue Status**), check the picks, turn Dry run OFF, **Clean Titles**, **Generate .strm Files**. Same for series with the `[SERIES]` actions, or both together with `[MOVIES + SERIES] Scan + Process` — handy since the plugin's schedule only has one slot (see [Scheduling](docs/scheduling.md)). The full walkthrough is in [First import](docs/first-import.md).
 
 ## Documentation
 
