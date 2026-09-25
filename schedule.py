@@ -27,6 +27,7 @@ class ScheduleMixin:
         "clean_movie_titles",
         "clean_series_titles",
         "scan_and_process_series",
+        "scan_and_process_both",
         "scan_series",
         "generate_movie_strm",
         "generate_series_strm",

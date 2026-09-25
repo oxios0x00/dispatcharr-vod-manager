@@ -1,6 +1,6 @@
 # Scheduling
 
-The plugin can run one action on its own cron schedule, independent of Dispatcharr's refresh. It uses django-celery-beat directly, since Dispatcharr has no scheduling API for plugins. There is **one schedule slot**: one cron and one action.
+The plugin can run one action on its own cron schedule, independent of Dispatcharr's refresh. It uses django-celery-beat directly, since Dispatcharr has no scheduling API for plugins. There is **one schedule slot**: one cron and one action — to cover Movies and Series both, pick **Scan + Process Movies then Series** rather than one of the single-content-type actions, since only the chosen action ever runs automatically.
 
 ## Setting it up
 
@@ -17,6 +17,6 @@ Set the cron **a few minutes after Dispatcharr's VOD refresh**, and after vod-pr
 
 ## Advice
 
-Leave the cron empty during a first import or against a large catalogue, and schedule only once you trust the picks. Choose an action that matches what you want to automate; the list includes Scan + Process (movies or series), the individual steps, Clean Titles, and both Generate actions.
+Leave the cron empty during a first import or against a large catalogue, and schedule only once you trust the picks. Choose an action that matches what you want to automate; the list includes Scan + Process (movies, series, or both back to back), the individual steps, Clean Titles, and both Generate actions.
 
 With **Run .strm generation automatically with Scan + Process** on, Generate also runs at the end of every Scan + Process, scheduled or a manual Run click. Generate still refuses if a queue is not empty, so on a large catalogue this may generate nothing until the queue is drained.

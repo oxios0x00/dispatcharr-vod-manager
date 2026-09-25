@@ -108,6 +108,7 @@ class PipelineMixin:
     _BACKGROUND_ACTIONS = {
         "scan_and_process": CONTENT_TYPE_MOVIE,
         "scan_and_process_series": CONTENT_TYPE_SERIES,
+        "scan_and_process_both": (CONTENT_TYPE_MOVIE, CONTENT_TYPE_SERIES),
     }
     # A run renews its lock between batches; a lock that has been silent this
     # long belongs to a run that died with its worker.
@@ -141,14 +142,17 @@ class PipelineMixin:
         return async_result.id, None
 
     def _start_background(self, action_id, settings, scheduled):
-        content_type = self._BACKGROUND_ACTIONS[action_id]
-        held_since = self.store.lock_held_since(
-            self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
-        )
-        if held_since:
-            return self._busy_lock_message(
-                "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS, renewed=True
+        content_types = self._BACKGROUND_ACTIONS[action_id]
+        if isinstance(content_types, str):
+            content_types = (content_types,)
+        for content_type in content_types:
+            held_since = self.store.lock_held_since(
+                self._pipeline_lock(content_type), self._PIPELINE_LOCK_STALE_SECONDS
             )
+            if held_since:
+                return self._busy_lock_message(
+                    "Scan + Process", held_since, self._PIPELINE_LOCK_STALE_SECONDS, renewed=True
+                )
         _, error = self._enqueue_background(action_id, settings, scheduled)
         if error:
             return error
@@ -278,6 +282,19 @@ class PipelineMixin:
             lambda settings, progress: self._process_batch(CONTENT_TYPE_MOVIE, settings, progress),
             self._generate_movie_strm,
         )
+
+    def _scan_and_process_both(self, settings):
+        """Movies then Series, back to back in the same background run —
+        the way to cover both from the plugin's single schedule slot (one
+        cron, one action; see docs/scheduling.md) instead of only one of
+        the two ever running automatically."""
+        movies = self._scan_and_process(settings)
+        series = self._scan_and_process_series(settings)
+        status = "error" if "error" in (movies.get("status"), series.get("status")) else "ok"
+        return {
+            "status": status,
+            "message": f"Movies: {movies.get('message', '')} || Series: {series.get('message', '')}",
+        }
 
     # --- scan / enqueue -----------------------------------------------------
 

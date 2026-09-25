@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -190,7 +190,7 @@
       "options": [
         {
           "value": "scan_and_process",
-          "label": "Scan + Process Movies (recommended)"
+          "label": "Scan + Process Movies"
         },
         {
           "value": "scan_movies",
@@ -206,7 +206,11 @@
         },
         {
           "value": "scan_and_process_series",
-          "label": "Scan + Process Series (recommended)"
+          "label": "Scan + Process Series"
+        },
+        {
+          "value": "scan_and_process_both",
+          "label": "Scan + Process Movies then Series (recommended)"
         },
         {
           "value": "scan_series",
@@ -225,6 +229,14 @@
     }
   ],
   "actions": [
+    {
+      "id": "scan_and_process_both",
+      "label": "[MOVIES + SERIES] Scan + Process",
+      "description": "Background run: Movies, then Series, back to back. Same as running both buttons below in sequence.",
+      "button_label": "Run",
+      "button_variant": "filled",
+      "button_color": "teal"
+    },
     {
       "id": "scan_and_process",
       "label": "[MOVIES] Scan + Process",

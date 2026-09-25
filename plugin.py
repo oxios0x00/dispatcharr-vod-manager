@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.4"
+    version = "2.4.5"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -234,11 +234,12 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "type": "select",
             "default": "scan_and_process",
             "options": [
-                {"value": "scan_and_process", "label": "Scan + Process Movies (recommended)"},
+                {"value": "scan_and_process", "label": "Scan + Process Movies"},
                 {"value": "scan_movies", "label": "Scan Movies only"},
                 {"value": "clean_movie_titles", "label": "Clean Movie Titles only"},
                 {"value": "clean_series_titles", "label": "Clean Series Titles only"},
-                {"value": "scan_and_process_series", "label": "Scan + Process Series (recommended)"},
+                {"value": "scan_and_process_series", "label": "Scan + Process Series"},
+                {"value": "scan_and_process_both", "label": "Scan + Process Movies then Series (recommended)"},
                 {"value": "scan_series", "label": "Scan Series only"},
                 {"value": "generate_movie_strm", "label": "Generate Movie .strm Files only"},
                 {"value": "generate_series_strm", "label": "Generate Series .strm Files only"},
@@ -248,6 +249,14 @@ class Plugin(PipelineMixin, ScheduleMixin):
     ]
 
     actions = [
+        {
+            "id": "scan_and_process_both",
+            "label": "[MOVIES + SERIES] Scan + Process",
+            "description": "Background run: Movies, then Series, back to back. Same as running both buttons below in sequence.",
+            "button_label": "Run",
+            "button_variant": "filled",
+            "button_color": "teal",
+        },
         {
             "id": "scan_and_process",
             "label": "[MOVIES] Scan + Process",
@@ -460,6 +469,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
             return self._scan_movies(settings)
         if action_id == "scan_and_process":
             return self._scan_and_process(settings)
+        if action_id == "scan_and_process_both":
+            return self._scan_and_process_both(settings)
         if action_id == "queue_status":
             return self._queue_status(CONTENT_TYPE_MOVIE)
         if action_id == "stop_queue":
