@@ -69,13 +69,10 @@ def series_ready(custom_properties):
     real result), "error" (tried, every episode failed) and "partial" (some
     seasons answered, one or more are confirmed dead) all count as done;
     only "pending" (not looked at yet, or a season still being sampled)
-    means keep waiting. Once ready, the per-episode selection below already
-    copes with a mix of measured and failed episodes on its own — an "error"
-    series ends up with zero usable episodes (surfaced as a title-level
-    error), a "partial" one keeps whatever episodes did measure. Before
-    vod-probe's schema addition of "error"/"partial" for this summary, a
-    series that could never fully resolve stayed "pending" forever, which
-    looked identical to "not measured yet" and left it waiting with no way
-    out."""
+    means keep waiting. The per-episode selection copes with a mix of
+    measured and failed episodes on its own once a series is ready: an
+    "error" series ends up with zero usable episodes (surfaced as a
+    title-level error), a "partial" one keeps whatever episodes did
+    measure."""
     found = block(custom_properties)
     return bool(found) and found.get("status") in _SERIES_DONE_STATUSES

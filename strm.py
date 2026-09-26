@@ -46,11 +46,10 @@ def id_tag(tmdb_id, imdb_id):
     """The Jellyfin/Emby external-id filename tag for a title, e.g.
     ' [tmdbid-12345]' or ' [imdbid-tt1234567]' (leading space, ready to
     append to a title). Prefers tmdb_id; falls back to imdb_id; returns
-    '' when neither is known — a media server then has only the title
-    text to identify the file by, same as before this feature existed.
-    Plex uses a different tag ({tmdb-12345}, no 'id' suffix, curly
-    braces) — this plugin targets Emby/Jellyfin only, matching the rest
-    of the .strm generation feature."""
+    '' when neither is known, leaving a media server only the title text
+    to identify the file by. Plex uses a different tag ({tmdb-12345}, no
+    'id' suffix, curly braces) — this plugin targets Emby/Jellyfin only,
+    matching the rest of the .strm generation feature."""
     if tmdb_id:
         return f" [tmdbid-{tmdb_id}]"
     if imdb_id:
@@ -180,8 +179,7 @@ def write_strm_if_changed(path, content):
 
 def write_strm(path, content, dry_run):
     """The only entry point a caller should use: decides itself whether to
-    actually write or only predict, so dry_run can't be forgotten at a call
-    site the way it was before — every .strm write in this plugin goes
-    through here, not through write_strm_if_changed/predict_strm_write
-    directly."""
+    actually write or only predict, so every .strm write in this plugin
+    goes through one place instead of each call site branching on
+    dry_run itself."""
     return predict_strm_write(path, content) if dry_run else write_strm_if_changed(path, content)

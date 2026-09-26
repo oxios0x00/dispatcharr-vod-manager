@@ -1,18 +1,42 @@
 # VOD Manager
 
-Curates Dispatcharr's VOD catalogue for movies and series: reads the companion plugin **vod-probe**'s per-relation quality/language/bitrate measurements, decides which version(s) of each title to keep, and prunes the rest from Dispatcharr's own database.
+[![Tests](https://github.com/oxios0x00/dispatcharr-vod-manager/actions/workflows/tests.yml/badge.svg)](https://github.com/oxios0x00/dispatcharr-vod-manager/actions/workflows/tests.yml)
+[![Latest release](https://img.shields.io/github/v/release/oxios0x00/dispatcharr-vod-manager)](../../releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- **Selection** — keep every version matching your quality/language settings (default), or just the single best per quality tier.
-- **Exclusions** — permanently exclude specific titles by TMDB id, regardless of the settings above.
-- **Title cleanup** — optionally strips junk provider prefixes from titles (cosmetic only, never affects selection).
-- **`.strm` generation** — optionally writes one file per kept relation, pinned directly to it, so Emby/Jellyfin can show true multi-version playback (Dispatcharr's own API only ever serves one version per title to a player).
-- **Scheduling** — optionally runs one action on its own cron, independent of Dispatcharr's own refresh.
+A [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) plugin that curates your VOD catalogue: it decides which version of each movie or episode is worth keeping, prunes the rest, and can write `.strm` files so Emby/Jellyfin show true multi-version playback — something Dispatcharr's own API can't do on its own.
+
+## The problem
+
+An IPTV provider group is rarely one clean version per title. The same movie often shows up in several categories — `4K MOVIES`, `FR MOVIES`, a bundle group — each a separate relation in Dispatcharr, sometimes a real 2160p remux, sometimes a re-encoded 480p file mislabelled as `[4K]`. Dispatcharr merges these into one title but, for a player using its Xtream API, serves back just **one** relation per title: the oldest one in its database, priority order aside — nothing to do with actual quality.
+
+VOD Manager fixes what your catalogue actually contains, not just what one player happens to be handed.
+
+## How it works
+
+VOD Manager doesn't probe anything itself. It works alongside a companion plugin, **[vod-probe](https://github.com/oxios0x00/dispatcharr-vod-probe)**, which runs `ffprobe` once per relation and writes the real resolution, audio languages, bitrate and HDR/codec info into it. VOD Manager reads those results, decides which relation(s) of each title match your quality/language settings, and (unless Dry run is on) deletes the rest from Dispatcharr's own database:
+
+```
+provider groups  →  Dispatcharr (relations)  →  vod-probe (measures each one)  →  VOD Manager (decides, prunes, writes .strm)
+```
+
+Splitting the two means the expensive part (`ffprobe`, one pass per relation) only ever runs once, and VOD Manager's own job — selection, pruning, `.strm` generation — is pure database work, safe to re-run as often as you like.
+
+## Features
+
+- **Selection** — keep every version matching your quality/language settings (default), or just the single best per quality tier. Never drops a title just for lacking your preferred quality: the best it has is kept instead.
+- **Exclusions** — permanently exclude specific titles by TMDB id, regardless of the settings above (a wrong TMDB match, a title you never want probed or pruned).
+- **Title cleanup** — strips junk provider prefixes (`NF -`, `4K-AMZ -`, ...) from titles, optionally. Cosmetic only, never affects selection.
+- **`.strm` generation** — writes one file per kept relation, pinned directly to it via Dispatcharr's own proxy (no provider credentials in the files), so Emby/Jellyfin can show every kept version as a separate, independently playable file.
+- **Scheduling** — runs one action on its own cron, independent of Dispatcharr's own refresh — including a combined "Movies then Series" action, since the plugin only gets one schedule slot.
+- **Background, resumable runs** — Scan + Process works through a queue batch by batch, survives a restart (in-progress titles are simply requeued), and picks up exactly where it left off.
 
 Everything defaults to the safe choice: Dry run is ON, cleanup keeps every matching version, and nothing is scheduled until you set it up. See [Settings and actions](docs/settings.md) for every option, or [Concepts](docs/concepts.md) for how it all fits together.
 
-## Status
+## Requirements
 
-In production since 2026-09-25, replacing the pre-vod-probe 1.3.0 plugin: vod-probe-driven selection, per-title exclusion, and `.strm` generation (including the Jellyfin-compatible naming) have all been run for real, including live (destructive) pruning of movie and series relations. Still worth validating with Dry run ON on your own catalogue first, as [First import](docs/first-import.md) walks through.
+- Dispatcharr, with an M3U/Xtream account that has VOD categories enabled.
+- [vod-probe](https://github.com/oxios0x00/dispatcharr-vod-probe) installed and enabled — VOD Manager decides purely from what vod-probe has already measured, and a title vod-probe hasn't looked at yet simply waits.
 
 ## Install
 

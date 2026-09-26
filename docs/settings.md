@@ -54,6 +54,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 ## Actions
 
 - **[MOVIES] / [SERIES]**: Scan + Process (background run), Scan, Queue Status, Stop, Clean Titles, Generate .strm Files.
+- **[MOVIES + SERIES] Scan + Process**: runs the Movies pipeline to completion, then Series, in one background task — the way to cover both from the plugin's single schedule slot (see [Scheduling](scheduling.md)) instead of picking just one.
 - **[MAINTENANCE]**: Catalog Stats (quality and language composition), Retry Errored Titles (puts titles that failed back in the queue; a failed title is otherwise retried only when its relations change), Delete .strm Files, Prune Orphaned State (deletes the plugin's own queue and known-relation rows for titles Dispatcharr has deleted; honours Dry Run, refuses while a batch is running, skips a content type with nothing queued, and never touches Dispatcharr's data or `.strm` files), Reset Plugin State (wipes the queues and history — the next scan starts from scratch; never touches Dispatcharr's own data).
 - **[SCHEDULE]**: Apply, Remove, Status.
 

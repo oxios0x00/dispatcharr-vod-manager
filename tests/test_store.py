@@ -31,9 +31,8 @@ def test_enqueue_then_claim_then_done():
 def test_enqueue_is_a_noop_once_a_row_already_exists():
     # Documents the real (surprising) contract: enqueue() is INSERT ...
     # ON CONFLICT DO NOTHING. A title already marked 'done' stays 'done'
-    # if you call enqueue() on it again — this is exactly the bug that
-    # made scan_movies silently fail to requeue changed titles (it must
-    # call requeue(), not enqueue(), for titles it has seen before).
+    # if you call enqueue() on it again — a caller that wants a
+    # previously-seen title reconsidered must call requeue() instead.
     def run(s):
         s.enqueue("movie", 1)
         s.claim_batch("movie", 10)
@@ -190,9 +189,8 @@ def test_reset_all_clears_every_table():
 
 
 def test_try_acquire_lock_blocks_a_second_holder():
-    # This is the guard added after a real production incident: a re-clicked
-    # or retried action landing on a second uwsgi worker while the first was
-    # still running must not start a duplicate one on top of it.
+    # A re-clicked or retried action landing on a second uwsgi worker while
+    # the first is still running must not start a duplicate run on top of it.
     def run(s):
         acquired, held_since = s.try_acquire_lock("process_movie_batch")
         assert acquired is True
@@ -225,10 +223,10 @@ def test_locks_are_independent_per_name():
 
 
 def test_stale_lock_can_be_reacquired_without_manual_release():
-    # A container restarted mid-batch (exactly what happened in production)
-    # leaves this row behind forever unless a stale lock can be reclaimed —
-    # stale_after=0 treats any already-held lock as abandoned immediately,
-    # standing in for "a very old lock" without sleeping in the test.
+    # A container restarted mid-batch leaves this row behind forever unless
+    # a stale lock can be reclaimed — stale_after=0 treats any already-held
+    # lock as abandoned immediately, standing in for "a very old lock"
+    # without sleeping in the test.
     import time as _time
 
     def run(s):

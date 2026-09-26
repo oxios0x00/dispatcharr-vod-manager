@@ -75,11 +75,10 @@ class PipelineMixin:
 
     def _busy_lock_message(self, human_name, held_since, stale_after=3600, renewed=False):
         """A re-click or an automatic retry found the same action still
-        running — without this, both would run to completion in parallel and
-        pin a worker each for the whole batch, which is what made the whole
-        UI look frozen during the 2026-09-18 production incident. held_since
-        comes from Store.try_acquire_lock or lock_held_since; a lock left by
-        a run that died clears itself after stale_after seconds."""
+        running — without this, both would run to completion in parallel,
+        each pinning a worker for the whole batch. held_since comes from
+        Store.try_acquire_lock or lock_held_since; a lock left by a run
+        that died clears itself after stale_after seconds."""
         elapsed = int(time.time() - held_since) if held_since else 0
         minutes = max(1, stale_after // 60)
         # Only a run that renews its lock has a "last activity"; for the others
@@ -345,12 +344,10 @@ class PipelineMixin:
     def _apply_prune(self, dry_run, delete_fn, remember_fn):
         """The only place a prune decision becomes real: a no-op when
         dry_run, otherwise deletes the losers and remembers what's left.
-        Both movie and series processing go through this instead of each
-        keeping their own `if dry_run` — two separate copies of that
-        check is exactly how a dry run once deleted nothing but still
-        updated known_relations, silently blocking the next real run,
-        and how Generate once wrote real files during a dry run despite
-        looking like it respected the setting."""
+        Both movie and series processing go through this single choke
+        point rather than each keeping its own `if dry_run` check, so a
+        dry run can never end up doing one of the two writes but not
+        the other."""
         if dry_run:
             return
         delete_fn()

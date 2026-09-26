@@ -18,6 +18,8 @@ This plugin measures nothing. The companion plugin **vod-probe** probes every re
 
 VOD Manager decides a title only when **every** relation of it has an answer. A relation nobody has looked at yet is never treated as a loser: the title waits (`waiting` in Queue Status) and is tried again at the next Scan + Process. A relation vod-probe could not measure (`error`, `unreachable`) counts as a loser when another version was measured, and a title where none was measured is put in `error`. When Dispatcharr reloads a series it erases what vod-probe wrote on its episodes; those titles simply wait until vod-probe has measured them again.
 
+A series version also carries its own summary status, separate from its episodes': `ok` once vod-probe has a full answer, `error` if every episode it sampled failed, `partial` if some seasons answered and others are confirmed dead, or `pending` while it's still being sampled. VOD Manager only moves on to per-episode selection once every series version of a title reads `ok`, `error` or `partial` — all three are final answers, only `pending` means keep waiting. This is what stops a series whose every episode is unreachable from waiting forever: without it, such a series would sit at `pending` indefinitely, indistinguishable from one vod-probe simply hadn't gotten to yet.
+
 ## Selection
 
 For each title, every tier listed in `target_qualities` (default `2160p,1080p`) is in scope — an **empty** list means every tier the title has is in scope, with no quality filter at all. Within a tier, a version is kept when its audio covers one of `target_languages` (default `fre,eng`); an empty list means every version in the tier is kept, language aside.

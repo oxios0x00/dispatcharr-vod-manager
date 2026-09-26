@@ -18,6 +18,8 @@ Its queue still has `pending` or `in_progress` items. Let Scan + Process finish 
 
 Queue Status shows `waiting=N` and Scan + Process ends with "N titles waiting for vod-probe". Those titles have at least one relation vod-probe has not measured. Check that vod-probe is installed, enabled and has run over the catalogue, then run Scan + Process again: each run gives waiting titles another chance. After Dispatcharr reloads a series (the interface does it when a series is opened after 24 hours) the measurements of its episodes are erased and the series waits until vod-probe has redone them.
 
+A series can also wait on its own summary status rather than its episodes: vod-probe marks a series version `pending` while still sampling it, and `ok`/`error`/`partial` once it's done, however that turned out (see [Concepts](concepts.md)). A series stuck at `pending` for a long time even though vod-probe reports nothing left to do is usually one whose every episode failed to probe — ask vod-probe to retry it (its own **Retry Errors** action).
+
 ## Titles in `error`
 
 Every relation of the title was `error` or `unreachable` for vod-probe, so nothing could be chosen. They are left alone from then on (a failed title is only queued again when its relations change), and **[MAINTENANCE] Retry Errored Titles** puts them back once vod-probe has measured them again or you think the cause is gone.
