@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/oxios0x00/dispatcharr-vod-manager/actions/workflows/tests.yml/badge.svg)](https://github.com/oxios0x00/dispatcharr-vod-manager/actions/workflows/tests.yml)
 [![Latest release](https://img.shields.io/github/v/release/oxios0x00/dispatcharr-vod-manager)](../../releases/latest)
-[![License](https://img.shields.io/github/license/oxios0x00/dispatcharr-vod-manager)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Dispatcharr](https://img.shields.io/badge/dispatcharr-%E2%89%A50.31.0-blue.svg)](https://github.com/Dispatcharr/Dispatcharr/releases/tag/v0.31.0)
 
 A [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) plugin that curates your VOD catalogue: it decides which version of each movie or episode is worth keeping, prunes the rest, and can write `.strm` files so Emby/Jellyfin show true multi-version playback — something Dispatcharr's own API can't do on its own.
