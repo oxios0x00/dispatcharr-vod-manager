@@ -70,22 +70,28 @@ def plan_suffixes(quality_labels):
     """Given the probed quality label (or None) for each of a title's
     kept relations, in a stable order, decide the filename suffix for
     each: the real quality label when known (or 'unprobed' if this
-    relation was never successfully probed), always shown — even for a
-    lone relation, so the quality is visible at a glance without having
-    to open the file. With two or more relations, the label is also
-    prefixed with a rank number so alphabetical sort matches quality
-    order instead of string order — helpful in any file listing, though
-    Emby does not necessarily use it to pick its default version (see
-    best_quality_first) — '1080p' sorts before '2160p' as plain text, which is
-    backwards. The fallback for an unprobed relation among several
-    becomes positional ('v2', 'v3', ...) instead of the ambiguous
-    'unprobed' repeated on more than one file, and never collides with a
-    real label."""
+    relation was never successfully probed), always shown, and always
+    prefixed with a rank number (`01`, `02`, ...) — even for a lone
+    relation. A title going from one kept version to two (or back) no
+    longer flips between "no rank" and "ranked" on its existing file
+    just because the count crossed that boundary; the rank number
+    itself can still shift when a version added or removed changes the
+    *quality order* of the survivors (a better one arriving above an
+    existing "01" bumps it to "02"), but a same-or-worse addition/removal
+    leaves every other file's name untouched. The rank also makes
+    alphabetical sort match quality order
+    instead of string order — helpful in any file listing, though Emby
+    does not necessarily use it to pick its default version (see
+    best_quality_first) — '1080p' sorts before '2160p' as plain text,
+    which is backwards. The fallback for an unprobed relation among
+    several becomes positional ('v2', 'v3', ...) instead of the
+    ambiguous 'unprobed' repeated on more than one file, and never
+    collides with a real label."""
     if not quality_labels:
         return []
 
     if len(quality_labels) == 1:
-        return [f" - {quality_labels[0] or 'unprobed'}"]
+        return [f" - 01 - {quality_labels[0] or 'unprobed'}"]
 
     names = []
     seen = set(label for label in quality_labels if label)

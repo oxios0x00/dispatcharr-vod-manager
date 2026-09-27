@@ -53,14 +53,14 @@ def test_build_proxy_url_omits_query_when_no_stream_id():
     assert url == "http://host:9292/proxy/vod/movie/abc-uuid"
 
 
-def test_plan_suffixes_shows_quality_even_for_a_single_relation():
+def test_plan_suffixes_always_ranks_even_a_single_relation():
     # No ambiguity to resolve with only one file, but the quality should
     # still be visible in the name without having to open it.
-    assert plan_suffixes(["2160p"]) == [" - 2160p"]
+    assert plan_suffixes(["2160p"]) == [" - 01 - 2160p"]
 
 
 def test_plan_suffixes_single_unprobed_relation_says_so_explicitly():
-    assert plan_suffixes([None]) == [" - unprobed"]
+    assert plan_suffixes([None]) == [" - 01 - unprobed"]
 
 
 def test_plan_suffixes_empty_input_returns_empty():
