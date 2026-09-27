@@ -12,13 +12,15 @@ A run renews its lock after every batch. If Dispatcharr is restarted in the midd
 
 ## Generate refuses to run
 
-Its queue still has `pending` or `in_progress` items. Let Scan + Process finish (or wait for it) until Queue Status reads `0 pending, 0 in progress`. Titles in `error` do not block it. This guard exists because generating while the queue is still open would give still-unmeasured titles a `- unprobed` filename and write a file for a relation that's about to be pruned, only for it to disappear on the next Generate run.
+Its queue still has `pending`, `in_progress` **or `waiting`** items. Let Scan + Process finish (or wait for it) until Queue Status reads `0 pending, 0 in progress, 0 waiting`. Titles in `error` do not block it. This guard exists because generating while the queue is still open would give still-unmeasured titles a `- unprobed` filename and write a file for a relation that's about to be pruned, only for it to disappear on the next Generate run. A single title still `waiting` blocks Generate for the **whole** content type, movies or series — so a file for an already-decided title (already pruned, already correct) can sit stale on disk until every other title's `waiting` count clears too.
 
 ## Titles stay `waiting`
 
 Queue Status shows `waiting=N` and Scan + Process ends with "N titles waiting for vod-probe". Those titles have at least one relation vod-probe has not measured. Check that vod-probe is installed, enabled and has run over the catalogue, then run Scan + Process again: each run gives waiting titles another chance. After Dispatcharr reloads a series (the interface does it when a series is opened after 24 hours) the measurements of its episodes are erased and the series waits until vod-probe has redone them.
 
 A series can also wait on its own summary status rather than its episodes: vod-probe marks a series version `pending` while still sampling it, and `ok`/`error`/`partial` once it's done, however that turned out (see [Concepts](concepts.md)). A series stuck at `pending` for a long time even though vod-probe reports nothing left to do is usually one whose every episode failed to probe — ask vod-probe to retry it (its own **Retry Errors** action).
+
+A batch of titles can also go `waiting` all at once, all with brand-new relations (no probe result at all, not even `pending`) whose `created_at` clusters around the exact same second — that's Dispatcharr's own VOD refresh landing in the middle of a vod-probe/vod-manager cycle. `cleanup_orphaned_vod_content` destroys and recreates a relation whenever the provider's response for it was empty or partial on that particular refresh (see the "destructive VOD cleanup" ticket referenced in the project's task list) — same title, same stream, but a fresh relation row with nothing measured yet. Nothing is actually wrong and there is nothing to fix by hand: it resolves itself at the next vod-probe run followed by the next Scan + Process, same as any other `waiting` title. Confirmed 2026-09-27 by checking the affected relations' `created_at` against Dispatcharr's own refresh log line ("Completed processing all N movies/series") for the same second.
 
 ## Titles in `error`
 
