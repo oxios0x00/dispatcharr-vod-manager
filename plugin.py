@@ -28,7 +28,7 @@ from .schedule import ScheduleMixin
 
 class Plugin(PipelineMixin, ScheduleMixin):
     name = "VOD Manager"
-    version = "2.4.12"
+    version = "2.4.13"
     description = (
         "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching "
         "your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. "
@@ -990,8 +990,11 @@ class Plugin(PipelineMixin, ScheduleMixin):
 
     def _reset_plugin_state(self, settings):
         """Wipes this plugin's own sidecar state (queues, known
-        relation sets, stop requests, run history, catalog stats, .strm
-        tracking) so the next Scan/Process starts completely from scratch.
+        relation sets, stop requests, run history, catalog stats) so the
+        next Scan/Process starts completely from scratch. Does not touch
+        the .strm manifest — that tracks what's really on disk, unrelated
+        to which titles need re-deciding, and Generate needs it intact to
+        keep telling a genuine orphan apart from a file it just wrote.
         Never touches Dispatcharr's own database or any real .strm file —
         pair with Delete .strm Files if you also want those gone."""
         self.store.reset_all()
@@ -999,7 +1002,7 @@ class Plugin(PipelineMixin, ScheduleMixin):
             "status": "ok",
             "message": (
                 "Plugin state reset: queues, known relations, "
-                "run history, catalog stats and .strm tracking all cleared. "
+                "run history and catalog stats all cleared. "
                 "Dispatcharr's own catalogue is untouched."
             ),
         }

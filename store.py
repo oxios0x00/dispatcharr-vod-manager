@@ -478,16 +478,23 @@ class Store:
 
     _ALL_TABLES = (
         "probe_queue", "known_relations",
-        "plugin_state", "run_log", "catalog_stats", "strm_manifest",
+        "plugin_state", "run_log", "catalog_stats",
         "run_locks",
     )
 
     def reset_all(self):
-        """Wipes every table this plugin owns: queues, known
-        relation sets, stop requests, run history, catalog stat snapshots and
-        .strm tracking. The next scan re-discovers everything as new and the
+        """Wipes every table this plugin owns except the .strm manifest:
+        queues, known relation sets, stop requests, run history and catalog
+        stat snapshots. The next scan re-discovers everything as new and the
         next process decides every title again. Never touches Dispatcharr's own
-        database — only this plugin's own sidecar state."""
+        database — only this plugin's own sidecar state.
+
+        The .strm manifest is deliberately left alone: it records what's
+        really on disk, which has nothing to do with which titles need
+        re-deciding. Wiping it here used to make Generate blind to every
+        already-orphaned file until the next unrelated write happened to
+        touch it — a reset meant to force a fresh decision on every title
+        should not also cost the plugin its memory of what it already wrote."""
         with self._connect() as conn:
             for table in self._ALL_TABLES:
                 conn.execute(f"DELETE FROM {table}")

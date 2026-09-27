@@ -166,7 +166,7 @@ def test_strm_manifest_is_independent_per_content_type():
     with_store(run)
 
 
-def test_reset_all_clears_every_table():
+def test_reset_all_clears_every_table_except_the_strm_manifest():
     def run(s):
         s.enqueue("movie", 1)
         s.set_known_relation_ids("movie", 1, {10, 11})
@@ -183,7 +183,10 @@ def test_reset_all_clears_every_table():
         assert s.get_known_relation_ids("movie", 1) is None
         assert s.stop_requested("movie") is False
         assert s.get_latest_catalog_stats() == (None, [])
-        assert s.get_strm_manifest("movie") == set()
+        # Left alone on purpose: it tracks what's really on disk, which a
+        # reset meant to force fresh *decisions* has no business erasing —
+        # see test_reset_all's docstring in store.py.
+        assert s.get_strm_manifest("movie") == {"/a.strm"}
 
     with_store(run)
 
