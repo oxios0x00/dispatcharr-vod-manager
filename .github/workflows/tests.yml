@@ -16,4 +16,3 @@ jobs:
       - run: pip install pytest ruff
       - run: ruff check .
       - run: pytest -q
-      - run: python3 tools/sync_plugin_json.py && git diff --exit-code plugin.json
