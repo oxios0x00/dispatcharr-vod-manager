@@ -23,6 +23,7 @@ RUNTIME_FILES = [
     "measurements.py",
     "exclusions.py",
     "strm.py",
+    "nfo.py",
     "title_cleanup.py",
     "LICENSE",
     "README.md",

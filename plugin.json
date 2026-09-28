@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.4.13",
+  "version": "2.5.0",
   "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -170,6 +170,13 @@
       "help_text": "ON (default): no .strm for a title with neither id (some providers never expose one). OFF: it still gets one, named from the raw title text."
     },
     {
+      "id": "strm_write_nfo",
+      "label": "Also write a .nfo sidecar next to each .strm",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): no companion Emby/Jellyfin plugin reads this yet, so it would just be an extra file most media servers ignore. ON: writes '<file>.strm.nfo' with vod-probe's already-measured streamdetails (video/audio codec, resolution, languages) — free, no extra probing. Flipping back to OFF deletes any already-written .nfo on the next Generate, same as an orphaned .strm."
+    },
+    {
       "id": "_section_schedule",
       "label": "[SCHEDULE]",
       "type": "info",
@@ -280,7 +287,7 @@
     {
       "id": "generate_movie_strm",
       "label": "[MOVIES] Generate .strm Files",
-      "description": "Write one .strm per kept movie relation. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
+      "description": "Write one .strm per kept movie relation, plus a .nfo sidecar for each if 'Also write a .nfo sidecar' is on. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -328,7 +335,7 @@
     {
       "id": "generate_series_strm",
       "label": "[SERIES] Generate .strm Files",
-      "description": "Write one .strm per kept episode relation. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
+      "description": "Write one .strm per kept episode relation, plus a .nfo sidecar for each if 'Also write a .nfo sidecar' is on. Refuses to run until Scan + Process is done. Runs in the background; a notification appears when finished.",
       "button_label": "Generate",
       "button_variant": "outline",
       "button_color": "cyan"
@@ -344,7 +351,7 @@
     {
       "id": "delete_strm_files",
       "label": "[MAINTENANCE] Delete .strm Files",
-      "description": "Deletes every generated .strm (movies and series) and clears the manifest. Real files, real delete.",
+      "description": "Deletes every generated .strm and .nfo (movies and series) and clears the manifest. Real files, real delete.",
       "button_label": "Delete",
       "button_variant": "outline",
       "button_color": "red",
