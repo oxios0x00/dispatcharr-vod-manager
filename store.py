@@ -482,6 +482,15 @@ class Store:
         "run_locks",
     )
 
+    def table_row_counts(self):
+        """{table: row count} for every table reset_all() would wipe, so a
+        dry run can report what it would do instead of guessing."""
+        with self._connect() as conn:
+            return {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in self._ALL_TABLES
+            }
+
     def reset_all(self):
         """Wipes every table this plugin owns except the .strm manifest:
         queues, known relation sets, stop requests, run history and catalog

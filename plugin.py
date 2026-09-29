@@ -581,13 +581,20 @@ class Plugin(PipelineMixin, ScheduleMixin):
             return {"status": "error", "message": "Set 'Library root path' in [.STRM OUTPUT] first."}
         movies_subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
         series_subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
+        dry_run = bool(settings.get("dry_run", True))
 
         cleared = []
         for subfolder in (movies_subfolder, series_subfolder):
             target = os.path.join(library_root, subfolder)
             if not os.path.isdir(target):
                 continue
-            for entry in os.listdir(target):
+            entries = os.listdir(target)
+            if not entries:
+                continue
+            if dry_run:
+                cleared.append(f"{target} ({len(entries)} entries)")
+                continue
+            for entry in entries:
                 entry_path = os.path.join(target, entry)
                 if os.path.isdir(entry_path):
                     shutil.rmtree(entry_path)
@@ -595,13 +602,19 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     os.remove(entry_path)
             cleared.append(target)
 
+        if not cleared:
+            return {"status": "ok", "message": "Nothing to delete — no .strm folders found at the configured path."}
+        if dry_run:
+            return {
+                "status": "ok",
+                "message": f"Would clear: {', '.join(cleared)}. The .strm manifest would also be cleared. Turn Dry Run off to do it.",
+            }
+
         self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, [])
         self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, [])
         self.store.save_strm_manifest(CONTENT_TYPE_MOVIE + "_nfo", [])
         self.store.save_strm_manifest(CONTENT_TYPE_EPISODE + "_nfo", [])
 
-        if not cleared:
-            return {"status": "ok", "message": "Nothing to delete — no .strm folders found at the configured path."}
         return {"status": "ok", "message": f"Cleared: {', '.join(cleared)}."}
 
     def _prune_orphaned_state(self, settings):
@@ -671,14 +684,21 @@ class Plugin(PipelineMixin, ScheduleMixin):
         keep telling a genuine orphan apart from a file it just wrote.
         Never touches Dispatcharr's own database or any real .strm file —
         pair with Delete .strm Files if you also want those gone."""
+        dry_run = bool(settings.get("dry_run", True))
+        counts = self.store.table_row_counts()
+        total = sum(counts.values())
+        if total == 0:
+            return {"status": "ok", "message": "Nothing to reset — plugin state is already empty."}
+        detail = ", ".join(f"{n} {table}" for table, n in counts.items() if n)
+        if dry_run:
+            return {
+                "status": "ok",
+                "message": f"Would reset: {detail}. Dispatcharr's own catalogue would stay untouched. Turn Dry Run off to do it.",
+            }
         self.store.reset_all()
         return {
             "status": "ok",
-            "message": (
-                "Plugin state reset: queues, known relations, "
-                "run history and catalog stats all cleared. "
-                "Dispatcharr's own catalogue is untouched."
-            ),
+            "message": f"Plugin state reset: {detail}. Dispatcharr's own catalogue is untouched.",
         }
 
 
