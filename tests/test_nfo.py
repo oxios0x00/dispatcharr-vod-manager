@@ -16,7 +16,7 @@ def _measured(**overrides):
         "video": {"codec": "hevc", "profile": "Main 10", "bit_depth": 10, "bit_rate": 15000000, "frame_rate": 23.976},
         "audio_languages": ["fre", "eng"],
         "audio": [
-            {"codec": "eac3", "channels": 6, "language": "fre"},
+            {"codec": "eac3", "channels": 6, "language": "fre", "bit_rate": 768000},
             {"codec": "aac", "channels": 2, "language": "eng"},
         ],
         "subtitle_languages": ["fre", "eng"],
@@ -27,6 +27,7 @@ def _measured(**overrides):
         "duration_secs": 7200,
         "container": "matroska,webm",
         "bit_rate": 18000000,
+        "size": 2568945112,
     }
     probe.update(overrides.pop("probe_overrides", {}))
     return {"resolution": "3840x2160", "probe": probe, **overrides}
@@ -82,6 +83,26 @@ def test_build_nfo_xml_one_audio_element_per_track_in_order():
     assert [t.find("language").text for t in tracks] == ["fre", "eng"]
     assert tracks[0].find("codec").text == "eac3"
     assert tracks[0].find("channels").text == "6"
+    assert tracks[0].find("bitrate").text == "768000"
+    assert tracks[1].find("bitrate") is None  # not measured on this track, no fabricated tag
+
+
+def test_build_nfo_xml_fileinfo_totals():
+    xml = build_nfo_xml("movie", "1", None, _measured())
+    root = ET.fromstring(xml.split("?>", 1)[1])
+    fileinfo = root.find("fileinfo")
+    assert fileinfo.find("totalbitrate").text == "18000000"
+    assert fileinfo.find("size").text == "2568945112"
+    assert fileinfo.find("container").text == "matroska,webm"
+
+
+def test_build_nfo_xml_omits_size_for_an_older_probe_block_without_it():
+    # schema_version 6 and earlier never wrote `size` at all.
+    cp = _measured()
+    del cp["probe"]["size"]
+    xml = build_nfo_xml("movie", "1", None, cp)
+    root = ET.fromstring(xml.split("?>", 1)[1])
+    assert root.find("fileinfo/size") is None
 
 
 def test_build_nfo_xml_one_subtitle_element_per_track_in_order():
