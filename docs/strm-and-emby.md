@@ -30,7 +30,58 @@ The folder tag `[tmdbid-…]` or `[imdbid-…]` is optional (`strm_include_id_ta
 
 **Generate refuses to run while its queue has `pending`, `in_progress` or `waiting` items**: generating early would name unmeasured titles `unprobed` and write files for relations that are about to be pruned. Finish Scan + Process first.
 
-It is safe to re-run. Unchanged files are left alone (their modification date is preserved, so it does not trigger a full media-server rescan). A relation that is later pruned, or a title that disappears, has its file removed on the next run, along with folders left empty. Only files this plugin wrote are ever touched: the plugin keeps a manifest of what it wrote, so NFOs, posters and anything you added by hand stay.
+It is safe to re-run. Unchanged files are left alone (their modification date is preserved, so it does not trigger a full media-server rescan). A relation that is later pruned, or a title that disappears, has its file removed on the next run, along with folders left empty. Only files this plugin wrote are ever touched: the plugin keeps a manifest of what it wrote, so posters and anything you added by hand stay untouched.
+
+## The `.nfo` sidecar
+
+When **Also write a .nfo sidecar next to each .strm** (`strm_write_nfo`, off by default) is on, Generate also writes a Kodi-style `.nfo` next to each `.strm`, named `<the .strm file's own name>.nfo` (appended, never a plain extension swap — Jellyfin's own native NFO saver would otherwise collide with it on a title's 2nd+ version, since it computes exactly that swap for those). It carries the TMDB/IMDB id and the streamdetails vod-probe already measured — video, audio and, since vod-probe 1.2.0, subtitle tracks — so a future companion Emby/Jellyfin plugin can populate MediaInfo without ever probing the stream itself:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<movie>
+  <tmdbid>631842</tmdbid>
+  <imdbid>tt6791350</imdbid>
+  <fileinfo>
+    <streamdetails>
+      <video>
+        <codec>hevc</codec>
+        <width>3840</width>
+        <height>2160</height>
+        <bitrate>15000000</bitrate>
+        <framerate>23.976</framerate>
+        <durationinseconds>7215.5</durationinseconds>
+        <hdrtype>dolbyvision</hdrtype>
+      </video>
+      <audio>
+        <codec>eac3</codec>
+        <channels>6</channels>
+        <language>fre</language>
+      </audio>
+      <audio>
+        <codec>aac</codec>
+        <channels>2</channels>
+        <language>eng</language>
+      </audio>
+      <subtitle>
+        <codec>subrip</codec>
+        <language>fre</language>
+      </subtitle>
+      <subtitle>
+        <codec>subrip</codec>
+        <language>eng</language>
+        <forced>true</forced>
+      </subtitle>
+      <subtitle>
+        <codec>subrip</codec>
+        <language>eng</language>
+        <hearingimpaired>true</hearingimpaired>
+      </subtitle>
+    </streamdetails>
+  </fileinfo>
+</movie>
+```
+
+An episode's `.nfo` uses `<episodedetails>` as its root instead, and never carries `<imdbid>` (Kodi only places that tag at the `<tvshow>` root, which this plugin never writes). `<forced>`/`<hearingimpaired>` are only present when the provider actually flags a track as such. Nothing else is written — no title, plot or cast: Emby/Jellyfin fill those in on their own from the id. A relation vod-probe hasn't measured yet (or whose probe failed) gets its `.strm` but no `.nfo` — streamdetails are never fabricated. The `.nfo` is tracked in the same orphan-cleanup manifest as the `.strm`, so it disappears along with it when a title is pruned or Delete .strm Files runs.
 
 ## Which version Emby plays by default
 

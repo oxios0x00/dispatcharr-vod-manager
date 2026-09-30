@@ -81,6 +81,10 @@ class Plugin(PipelineMixin, ScheduleMixin):
             if not context.get("background"):
                 return self._start_generate(action_id, settings)
             return self._run_generate_in_background(action_id, settings)
+        if action_id == "delete_strm_files":
+            if not context.get("background"):
+                return self._start_delete_strm_files(settings)
+            return self._run_delete_strm_files_in_background(settings)
         if action_id == "clean_movie_titles":
             return self._clean_movie_titles(settings)
         if action_id == "clean_series_titles":
@@ -103,8 +107,6 @@ class Plugin(PipelineMixin, ScheduleMixin):
             return self._queue_status(CONTENT_TYPE_SERIES)
         if action_id == "catalog_stats":
             return self._catalog_stats(settings)
-        if action_id == "delete_strm_files":
-            return self._delete_strm_files(settings)
         if action_id == "reset_plugin_state":
             return self._reset_plugin_state(settings)
         if action_id == "prune_orphaned_state":
@@ -189,6 +191,44 @@ class Plugin(PipelineMixin, ScheduleMixin):
         self._notify_run_finished(
             label.replace(" ", "-"), result.get("message", ""), stopped=result.get("status") == "error",
             logger=logger, title=f"VOD Manager: {label} " + ("failed" if result.get("status") == "error" else "generated"),
+        )
+        return result
+
+    # --- delete .strm files (background: real filesystem I/O over the whole
+    # library, the same "longer than the browser/nginx will wait" reasoning
+    # as Scan + Process and Generate — it once ran synchronously and crashed
+    # a uwsgi worker (OSError: too many open files) on a ~18k-file library) --
+
+    _DELETE_STRM_LOCK = "delete_strm_files"
+    _DELETE_STRM_LOCK_STALE_SECONDS = 3600
+
+    def _start_delete_strm_files(self, settings):
+        held_since = self.store.lock_held_since(self._DELETE_STRM_LOCK, self._DELETE_STRM_LOCK_STALE_SECONDS)
+        if held_since:
+            return self._busy_lock_message("Delete .strm Files", held_since, self._DELETE_STRM_LOCK_STALE_SECONDS)
+        _, error = self._enqueue_background("delete_strm_files", settings, scheduled=False)
+        if error:
+            return error
+        return {
+            "status": "ok",
+            "message": "Delete .strm Files started in the background; a notification appears when it is done.",
+        }
+
+    def _run_delete_strm_files_in_background(self, settings):
+        import logging
+
+        logger = logging.getLogger("vod_manager.delete_strm_files")
+        acquired, held_since = self.store.try_acquire_lock(self._DELETE_STRM_LOCK, self._DELETE_STRM_LOCK_STALE_SECONDS)
+        if not acquired:
+            return self._busy_lock_message("Delete .strm Files", held_since, self._DELETE_STRM_LOCK_STALE_SECONDS)
+        try:
+            result = self._delete_strm_files(settings)
+        finally:
+            self.store.release_lock(self._DELETE_STRM_LOCK)
+        logger.info("Delete .strm Files finished: %s", result.get("message"))
+        self._notify_run_finished(
+            "delete-strm-files", result.get("message", ""), stopped=result.get("status") == "error",
+            logger=logger, title="VOD Manager: Delete .strm Files " + ("failed" if result.get("status") == "error" else "done"),
         )
         return result
 

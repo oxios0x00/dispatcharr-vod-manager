@@ -87,4 +87,11 @@ def build_nfo_xml(root_tag, tmdb_id, imdb_id, custom_properties):
         _text(audio, "channels", track.get("channels"))
         _text(audio, "language", track.get("language"))
 
+    for track in probe.get("subtitle") or []:
+        subtitle = ET.SubElement(streamdetails, "subtitle")
+        _text(subtitle, "codec", track.get("codec"))
+        _text(subtitle, "language", track.get("language"))
+        _text(subtitle, "forced", "true" if track.get("forced") else None)
+        _text(subtitle, "hearingimpaired", "true" if track.get("hearing_impaired") else None)
+
     return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + ET.tostring(root, encoding="unicode")

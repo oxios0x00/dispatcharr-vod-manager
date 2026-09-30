@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -351,7 +351,7 @@
     {
       "id": "delete_strm_files",
       "label": "[MAINTENANCE] Delete .strm Files",
-      "description": "Deletes every generated .strm and .nfo (movies and series) and clears the manifest. Real files, real delete. Uses Dry Run.",
+      "description": "Starts a background run that deletes every generated .strm and .nfo (movies and series) and clears the manifest. Real files, real delete. Uses Dry Run. Follow it with the notification centre.",
       "button_label": "Delete",
       "button_variant": "outline",
       "button_color": "red",

@@ -19,6 +19,11 @@ def _measured(**overrides):
             {"codec": "eac3", "channels": 6, "language": "fre"},
             {"codec": "aac", "channels": 2, "language": "eng"},
         ],
+        "subtitle_languages": ["fre", "eng"],
+        "subtitle": [
+            {"codec": "subrip", "language": "fre"},
+            {"codec": "subrip", "language": "eng", "forced": True, "hearing_impaired": True},
+        ],
         "duration_secs": 7200,
         "container": "matroska,webm",
         "bit_rate": 18000000,
@@ -77,6 +82,28 @@ def test_build_nfo_xml_one_audio_element_per_track_in_order():
     assert [t.find("language").text for t in tracks] == ["fre", "eng"]
     assert tracks[0].find("codec").text == "eac3"
     assert tracks[0].find("channels").text == "6"
+
+
+def test_build_nfo_xml_one_subtitle_element_per_track_in_order():
+    xml = build_nfo_xml("movie", "1", None, _measured())
+    root = ET.fromstring(xml.split("?>", 1)[1])
+    tracks = root.findall("fileinfo/streamdetails/subtitle")
+    assert [t.find("language").text for t in tracks] == ["fre", "eng"]
+    assert tracks[0].find("codec").text == "subrip"
+    assert tracks[0].find("forced") is None  # not flagged on this track, no empty tag written
+    assert tracks[0].find("hearingimpaired") is None
+    assert tracks[1].find("forced").text == "true"
+    assert tracks[1].find("hearingimpaired").text == "true"
+
+
+def test_build_nfo_xml_has_no_subtitle_elements_for_an_older_probe_block_without_them():
+    # schema_version 5 and earlier never wrote `subtitle` at all — graceful
+    # degradation, not a crash, for a relation vod-probe hasn't re-measured yet.
+    cp = _measured()
+    del cp["probe"]["subtitle"]
+    xml = build_nfo_xml("movie", "1", None, cp)
+    root = ET.fromstring(xml.split("?>", 1)[1])
+    assert root.findall("fileinfo/streamdetails/subtitle") == []
 
 
 def test_build_nfo_xml_omits_duration_for_an_inferred_episode():

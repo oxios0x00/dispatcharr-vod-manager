@@ -46,6 +46,7 @@ An excluded title's relations reappear, and get pruned again, the next time Disp
 | Run .strm generation automatically with Scan + Process | OFF | ON: Generate also runs at the end of every Scan + Process, manual click or scheduled. |
 | Include `[tmdbid-…]` in the folder name | ON | Tags the title folder for Emby/Jellyfin; also repeated on every file name (movies and episodes) — needed for Jellyfin to group movie versions (episode grouping works differently, see [Limitations](limitations.md)). Flipping it either way renames every tagged folder, and every file inside it, at the next Generate. |
 | Skip titles with no TMDB/IMDB id | ON | No `.strm` at all for those titles (and an existing one is removed) — some providers never expose an id for certain content, confirmed happening for entire series catalogues on at least one provider, and a media server has nothing reliable to identify the file by regardless of the title text. OFF: it still gets a `.strm`, named from the raw provider title text. |
+| Also write a .nfo sidecar next to each .strm | OFF | Writes `<file>.strm.nfo` with vod-probe's already-measured streamdetails (video/audio/subtitle codec, resolution, languages) — free, no extra probing. Only for a relation vod-probe has actually measured. See [.strm files and Emby / Jellyfin](strm-and-emby.md#the-nfo-sidecar). Flipping back to OFF deletes any already-written `.nfo` on the next Generate, same as an orphaned `.strm`. |
 
 ## Schedule
 

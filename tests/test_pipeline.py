@@ -241,6 +241,31 @@ def test_generate_in_the_background_runs_it_and_reports_the_outcome():
     with_plugin(run)
 
 
+def test_delete_strm_files_click_is_refused_while_one_is_running():
+    def run(plugin):
+        plugin.store.try_acquire_lock("delete_strm_files")
+        result = plugin.run("delete_strm_files", {}, {"settings": {}})
+        assert result["status"] == "error" and "already running" in result["message"]
+
+    with_plugin(run)
+
+
+def test_delete_strm_files_in_the_background_runs_it_and_reports_the_outcome():
+    def run(plugin):
+        notified = {}
+        plugin._delete_strm_files = lambda _s: {"status": "ok", "message": "Cleared: /lib/movies."}
+        plugin._notify_run_finished = lambda unit, message, stopped, logger, title=None: notified.update(
+            unit=unit, message=message, stopped=stopped, title=title
+        )
+        result = plugin.run("delete_strm_files", {}, {"settings": {}, "background": True})
+        assert result["message"] == "Cleared: /lib/movies."
+        assert notified["message"] == "Cleared: /lib/movies." and not notified["stopped"]
+        assert "done" in notified["title"]
+        assert plugin.store.lock_held_since("delete_strm_files") is None  # released after the run
+
+    with_plugin(run)
+
+
 def test_pipeline_goes_on_after_a_batch_made_only_of_waiting_titles():
     def run(plugin):
         batches = [
