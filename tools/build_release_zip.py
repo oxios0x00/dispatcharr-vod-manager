@@ -27,6 +27,7 @@ RUNTIME_FILES = [
     "title_cleanup.py",
     "LICENSE",
     "README.md",
+    "logo.png",
 ]
 
 
