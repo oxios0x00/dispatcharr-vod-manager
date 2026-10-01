@@ -154,6 +154,32 @@ def remove_stale_files(paths, stop_dir):
     return removed
 
 
+def remove_stale_files_in_library(paths, library_root, profile_dirs=()):
+    """remove_stale_files for paths spread over several profile folders: each
+    path is pruned up to, never including, its profile folder (kept in case
+    a media server has it mounted as its library root). `profile_dirs` are
+    the known full profile folders; a path under none of them (a profile
+    removed from the settings) stops at the first folder under
+    `library_root` instead. A path outside `library_root` (the root setting
+    changed) is deleted without pruning any folder. Returns the number of
+    files actually deleted."""
+    root = os.path.normpath(library_root)
+    known = sorted((os.path.normpath(d) for d in profile_dirs), key=len, reverse=True)
+    by_stop_dir = {}
+    for path in paths:
+        norm = os.path.normpath(path)
+        stop_dir = next((d for d in known if norm.startswith(d + os.sep)), None)
+        if stop_dir is None:
+            rel = os.path.relpath(norm, root)
+            top = rel.split(os.sep, 1)[0]
+            if top == os.pardir or os.path.isabs(rel) or rel == os.curdir:
+                stop_dir = os.path.dirname(norm)
+            else:
+                stop_dir = os.path.join(root, top)
+        by_stop_dir.setdefault(stop_dir, []).append(path)
+    return sum(remove_stale_files(group, stop_dir) for stop_dir, group in by_stop_dir.items())
+
+
 def predict_strm_write(path, content):
     """What write_strm_if_changed would do, without touching the file —
     the dry-run path for .strm generation. Reads the same way, just never

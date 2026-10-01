@@ -14,7 +14,7 @@ That is why this plugin exists. It **reads** what vod-probe measured for every r
 
 ## Measurements
 
-This plugin measures nothing. The companion plugin **vod-probe** probes every relation once with `ffprobe` and writes the result into the relation itself (`custom_properties`): the quality tier (`2160p`, `1080p`, `720p`, `480p`, `sd`, taken from the real resolution, never from the provider's label), the audio languages, the overall bitrate and a status (`ok`, `inferred` for an episode that received the result of a sibling, `error` or `unreachable`). vod-probe also loads the episodes of a series and decides how many it probes.
+This plugin measures nothing. The companion plugin **vod-probe** probes every relation once with `ffprobe` and writes the result into the relation itself (`custom_properties`): the quality tier (`2160p`, `1080p`, `720p`, `480p`, `sd`, taken from the real resolution, never from the provider's label), the audio languages, the overall bitrate, the file size and container, and a status (`ok`, `inferred` for an episode that received the result of a sibling of the same season and version — without its duration, which is specific to one episode, `error` or `unreachable`). vod-probe also loads the episodes of a series and decides how many it probes.
 
 VOD Manager decides a title only when **every** relation of it has an answer. A relation nobody has looked at yet is never treated as a loser: the title waits (`waiting` in Queue Status) and is tried again at the next Scan + Process. A relation vod-probe could not measure (`error`, `unreachable`) counts as a loser when another version was measured, and a title where none was measured is put in `error`. When Dispatcharr reloads a series it erases what vod-probe wrote on its episodes; those titles simply wait until vod-probe has measured them again.
 
@@ -46,4 +46,4 @@ The plugin works through a queue. **Scan** puts a title in it when its set of re
 
 ## `.strm` files
 
-Dispatcharr's own API only serves one version, so for Emby and Jellyfin the plugin writes a `.strm` file per kept relation, pinned to that exact relation through Dispatcharr's proxy. See [.strm files and Emby / Jellyfin](strm-and-emby.md).
+Dispatcharr's own API only serves one version, so for Emby and Jellyfin the plugin writes a `.strm` file per kept relation, pinned to that exact relation through Dispatcharr's proxy. See [.strm files and Emby / Jellyfin](strm-and-emby.md). Which versions a media server proposes first is its own decision, not language-aware; to give each audience its own set of versions, the files can be routed into several folders by audio language (see [Language profiles](strm-and-emby.md#language-profiles)). That routing only decides where `.strm` files go: it never prunes anything, and the languages named by a profile are added to `target_languages` for the selection above so that a version kept for a profile is not pruned.

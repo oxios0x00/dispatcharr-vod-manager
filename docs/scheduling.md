@@ -1,6 +1,6 @@
 # Scheduling
 
-The plugin can run one action on its own cron schedule, independent of Dispatcharr's refresh. It uses django-celery-beat directly, since Dispatcharr has no scheduling API for plugins. There is **one schedule slot**: one cron and one action — to cover Movies and Series both, pick **Scan + Process Movies then Series** rather than one of the single-content-type actions, since only the chosen action ever runs automatically.
+The plugin can run one action on its own cron schedule, independent of Dispatcharr's refresh. It uses django-celery-beat directly, since Dispatcharr has no scheduling API for plugins. There is **one schedule slot**: one cron and one action — to cover Movies and Series both, pick **Scan + Process Movies then Series** (the `[MOVIES + SERIES] Scan + Process` action; the recommended choice, though the dropdown still defaults to movies only) rather than one of the single-content-type actions, since only the chosen action ever runs automatically.
 
 ## Setting it up
 

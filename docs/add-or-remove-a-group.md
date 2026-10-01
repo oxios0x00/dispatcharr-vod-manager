@@ -15,7 +15,7 @@ Whether a new, better version replaces the old one depends on your settings: wit
 
 1. **Disable the group** on the M3U account.
 2. **Run a VOD refresh of the account** (manual, or wait for the scheduled one). The refresh skips disabled categories, then deletes every relation it did not see again, and every movie or series left with no relation in any other group. Episodes go with their series.
-3. **Click Generate Movie / Series .strm Files.** It compares against the manifest of what it wrote last time and deletes the orphaned `.strm` files and the folders left empty. The plugin never does this by itself: without this click the files stay on disk. Generate refuses to run while a queue still has `pending` or `in_progress` items, so finish Process Batch first.
+3. **Click Generate Movie / Series .strm Files.** It compares against the manifest of what it wrote last time and deletes the orphaned `.strm` files and the folders left empty. The plugin never does this by itself: without this click the files stay on disk. Generate refuses to run while a queue still has `pending` or `in_progress` items, so finish Scan + Process first.
 4. **Scan the library in Emby/Jellyfin** so it drops the items whose files are gone.
 
 What survives: a title also present in another enabled group keeps that group's versions. Only the removed group's `.strm` files go, and a remaining file's name can change (`- 02 - 1080p` becomes `- 1080p` once it is the only version left).

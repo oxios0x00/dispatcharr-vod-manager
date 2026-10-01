@@ -14,6 +14,14 @@ A run renews its lock after every batch. If Dispatcharr is restarted in the midd
 
 Its queue still has `pending`, `in_progress` **or `waiting`** items. Let Scan + Process finish (or wait for it) until Queue Status reads `0 pending, 0 in progress, 0 waiting`. Titles in `error` do not block it. This guard exists because generating while the queue is still open would give still-unmeasured titles a `- unprobed` filename and write a file for a relation that's about to be pruned, only for it to disappear on the next Generate run. A single title still `waiting` blocks Generate for the **whole** content type, movies or series — so a file for an already-decided title (already pruned, already correct) can sit stale on disk until every other title's `waiting` count clears too.
 
+## ".STRM profiles: line N …"
+
+The **Language profiles** field is malformed, and Generate, Scan + Process and Delete .strm Files refuse to run until it is fixed — nothing is written, pruned or deleted meanwhile. The message gives the line and the reason: a missing field (a profile needs name, languages, movies folder and series folder), a language code that is not three letters (`fre`, not `fr`), an `all` profile marked `exclusif`, a folder used by two profiles, or a folder name with `/` or `..`. See [Language profiles](strm-and-emby.md#language-profiles).
+
+## A title has no `.strm` after adding language profiles
+
+None of its versions matches a profile (and there is no `all` profile), or none of them was measured, which leaves it without any known language. Generate's message counts them ("N movie(s) matched no profile"); add an `all` profile to catch the rest. With Dry run ON, the message shows the same counts as `Would:` before anything is removed.
+
 ## Titles stay `waiting`
 
 Queue Status shows `waiting=N` and Scan + Process ends with "N titles waiting for vod-probe". Those titles have at least one relation vod-probe has not measured. Check that vod-probe is installed, enabled and has run over the catalogue, then run Scan + Process again: each run gives waiting titles another chance. After Dispatcharr reloads a series (the interface does it when a series is opened after 24 hours) the measurements of its episodes are erased and the series waits until vod-probe has redone them.

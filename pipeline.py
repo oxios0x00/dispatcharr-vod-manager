@@ -382,9 +382,14 @@ class PipelineMixin:
             return self._busy_lock_message("A movie batch" if is_movie else "A series batch", held_since)
         try:
             from .exclusions import parse_excluded_ids
+            from .profiles import ProfileError, retention_languages
 
             target_qualities = _parse_csv_list(settings.get("target_qualities"))
             target_languages = _parse_csv_list(settings.get("target_languages"))
+            try:
+                target_languages = retention_languages(target_languages, self._profiles(settings))
+            except ProfileError as exc:
+                return {"status": "error", "message": f".STRM profiles: {exc}. Nothing was pruned."}
             exclude_unmatched_language = bool(settings.get("exclude_unmatched_language", False))
             exclude_unmatched_quality = bool(settings.get("exclude_unmatched_quality", False))
             keep_one_per_tier = bool(settings.get("keep_one_version_per_tier", False))

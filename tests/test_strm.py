@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from strm import build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, sanitize_filename, write_strm_if_changed
+from strm import build_proxy_url, id_tag, plan_suffixes, predict_strm_write, remove_stale_files, remove_stale_files_in_library, sanitize_filename, write_strm_if_changed
 
 
 def test_sanitize_filename_strips_invalid_characters():
@@ -227,3 +227,52 @@ def test_best_quality_first_keeps_a_single_relation():
     from strm import best_quality_first
 
     assert best_quality_first(["only"], [" - 1080p"]) == [("only", " - 1080p")]
+
+
+def test_remove_stale_files_in_library_prunes_up_to_each_profile_folder(tmp_path):
+    root = str(tmp_path)
+    paths = []
+    for profile in ("movies", "movies-ar"):
+        movie_dir = os.path.join(root, profile, "Some Movie (2020)")
+        os.makedirs(movie_dir)
+        path = os.path.join(movie_dir, "Some Movie (2020) - 01 - 2160p.strm")
+        with open(path, "w") as f:
+            f.write("x")
+        paths.append(path)
+
+    removed = remove_stale_files_in_library(paths, root)
+
+    assert removed == 2
+    for profile in ("movies", "movies-ar"):
+        assert os.path.isdir(os.path.join(root, profile))  # profile folder itself kept
+        assert os.listdir(os.path.join(root, profile)) == []  # emptied title folder pruned
+
+
+def test_remove_stale_files_in_library_deletes_a_path_outside_the_root_without_pruning(tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    other = tmp_path / "elsewhere" / "Movie"
+    other.mkdir(parents=True)
+    path = other / "Movie - 01 - 1080p.strm"
+    path.write_text("x")
+
+    removed = remove_stale_files_in_library([str(path)], str(root))
+
+    assert removed == 1
+    assert not path.exists()
+    assert other.exists()  # nothing outside the library root is pruned
+
+
+def test_remove_stale_files_in_library_stops_at_a_known_nested_profile_folder(tmp_path):
+    root = str(tmp_path)
+    profile_dir = os.path.join(root, "a", "b")
+    title_dir = os.path.join(profile_dir, "Some Movie (2020)")
+    os.makedirs(title_dir)
+    path = os.path.join(title_dir, "Some Movie (2020) - 01 - 1080p.strm")
+    with open(path, "w") as f:
+        f.write("x")
+
+    removed = remove_stale_files_in_library([path], root, profile_dirs=[profile_dir])
+
+    assert removed == 1
+    assert os.path.isdir(profile_dir)  # the configured folder survives even though "a" is the first level

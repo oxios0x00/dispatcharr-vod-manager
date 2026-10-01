@@ -24,6 +24,7 @@ RUNTIME_FILES = [
     "exclusions.py",
     "strm.py",
     "nfo.py",
+    "profiles.py",
     "title_cleanup.py",
     "LICENSE",
     "README.md",

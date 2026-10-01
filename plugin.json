@@ -1,6 +1,6 @@
 {
   "name": "VOD Manager",
-  "version": "2.5.3",
+  "version": "2.6.1",
   "description": "Curates Dispatcharr's VOD catalogue from vod-probe's measurements: keeps the versions matching your quality/language settings and prunes the rest. Optional .strm generation for Emby/Jellyfin. Needs vod-probe. Dry-run by default.",
   "author": "oxios0x00",
   "license": "MIT",
@@ -147,6 +147,14 @@
       "label": "Series subfolder name",
       "type": "string",
       "default": "series"
+    },
+    {
+      "id": "strm_profiles",
+      "label": "Language profiles (one per line)",
+      "type": "text",
+      "default": "",
+      "placeholder": "arabe : ara : movies-ar : series-ar : exclusif\nprincipal : all : movies : series",
+      "help_text": "Empty (default): one folder pair, from the two subfolder names above. Otherwise one profile per line, 'name : languages : movies folder : series folder', optionally ending in ': exclusif'. languages = ISO 639-2 codes separated by commas, or 'all'. A version goes to every profile it matches; a version matching an 'exclusif' profile goes only to the first such profile and to no other, so use it with care. When this is filled, the two subfolder names above are ignored. See docs/strm-and-emby.md."
     },
     {
       "id": "auto_generate_strm",

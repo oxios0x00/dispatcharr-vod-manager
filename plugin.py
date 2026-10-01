@@ -137,6 +137,18 @@ class Plugin(PipelineMixin, ScheduleMixin):
         "generate_series_strm": (CONTENT_TYPE_SERIES, "Series .strm generation", "series .strm files"),
     }
 
+    def _profiles(self, settings):
+        """The .strm routing profiles; raises profiles.ProfileError when the
+        setting is malformed. An empty setting is one implicit profile on
+        the plain movies/series subfolder settings."""
+        from .profiles import parse_profiles
+
+        return parse_profiles(
+            settings.get("strm_profiles"),
+            (settings.get("strm_movies_subfolder") or "movies").strip() or "movies",
+            (settings.get("strm_series_subfolder") or "series").strip() or "series",
+        )
+
     def _generate_blocker(self, content_type, settings):
         """Why a .strm generation cannot start now, or None. Checked when the
         button is clicked, so the refusal shows at once instead of in a
@@ -148,6 +160,12 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 "status": "error",
                 "message": "Set both 'Dispatcharr base URL' and 'Library root path' in [.STRM OUTPUT] first.",
             }
+        from .profiles import ProfileError
+
+        try:
+            self._profiles(settings)
+        except ProfileError as exc:
+            return {"status": "error", "message": f".STRM profiles: {exc}. Nothing was written or removed."}
         queue = self.store.queue_counts(content_type)
         if queue["pending"] or queue["in_progress"] or queue["waiting"]:
             queue_name = "Queue Status" if content_type == CONTENT_TYPE_MOVIE else "Series Queue Status"
@@ -382,7 +400,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
             from apps.vod.models import M3UMovieRelation
             from . import measurements
             from .nfo import build_nfo_xml, nfo_path
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm
+            from .profiles import assign
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files_in_library, sanitize_filename, write_strm
 
             blocker = self._generate_blocker(CONTENT_TYPE_MOVIE, settings)
             if blocker:
@@ -390,8 +409,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
             dry_run = bool(settings.get("dry_run", True))
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
-            subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
-            library_dir = os.path.join(library_root, subfolder)
+            profiles = self._profiles(settings)
+            profile_dirs = [os.path.join(library_root, p.movies_dir) for p in profiles]
             include_id_tag = bool(settings.get("strm_include_id_tag"))
             require_id = bool(settings.get("strm_require_id"))
             write_nfo = bool(settings.get("strm_write_nfo"))
@@ -402,13 +421,15 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 .order_by("movie_id", "id")
             )
             quality_by_relation = {r.id: measurements.tier(r.custom_properties) for r in relations}
+            languages_by_relation = {r.id: measurements.languages(r.custom_properties) for r in relations}
 
             by_movie = {}
             for rel in relations:
                 by_movie.setdefault(rel.movie_id, []).append(rel)
 
-            created = updated = unchanged = errors = skipped_no_id = 0
+            created = updated = unchanged = errors = skipped_no_id = unrouted = 0
             nfo_written = 0
+            written_by_profile = {p.name: 0 for p in profiles}
             current_paths = set()
             current_nfo_paths = set()
             for movie_relations in by_movie.values():
@@ -422,44 +443,57 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     continue
                 tag = id_tag(movie.tmdb_id, movie.imdb_id) if include_id_tag else ""
                 folder_name = sanitize_filename(movie.name + tag)
-                movie_dir = os.path.join(library_dir, folder_name)
-                suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in movie_relations])
 
-                for rel, suffix in best_quality_first(movie_relations, suffixes):
-                    # Jellyfin only groups several files as versions of one
-                    # movie when each file name starts character-for-character
-                    # with the folder name, tag included — so the file name
-                    # must repeat exactly what the folder is named, not just
-                    # the plain title.
-                    path = os.path.join(movie_dir, f"{folder_name}{suffix}.strm")
-                    url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
-                    try:
-                        result = write_strm(path, url, dry_run)
-                    except OSError:
-                        errors += 1
-                        continue
-                    current_paths.add(path)
-                    if result == "created":
-                        created += 1
-                    elif result == "updated":
-                        updated += 1
-                    else:
-                        unchanged += 1
+                routed = {}
+                for rel in movie_relations:
+                    for profile in assign(profiles, languages_by_relation[rel.id]):
+                        routed.setdefault(profile, []).append(rel)
+                if not routed:
+                    # No profile takes any version of this movie; like a
+                    # skipped id, its files are cleaned by the stale pass.
+                    unrouted += 1
+                    continue
 
-                    if not write_nfo:
-                        continue
-                    xml = build_nfo_xml("movie", movie.tmdb_id, movie.imdb_id, rel.custom_properties)
-                    if xml is None:
-                        continue
-                    sidecar = nfo_path(path)
-                    try:
-                        nfo_result = write_strm(sidecar, xml, dry_run)
-                    except OSError:
-                        errors += 1
-                        continue
-                    current_nfo_paths.add(sidecar)
-                    if nfo_result in ("created", "updated"):
-                        nfo_written += 1
+                for profile, profile_relations in routed.items():
+                    movie_dir = os.path.join(library_root, profile.movies_dir, folder_name)
+                    suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in profile_relations])
+
+                    for rel, suffix in best_quality_first(profile_relations, suffixes):
+                        # Jellyfin only groups several files as versions of one
+                        # movie when each file name starts character-for-character
+                        # with the folder name, tag included — so the file name
+                        # must repeat exactly what the folder is named, not just
+                        # the plain title.
+                        path = os.path.join(movie_dir, f"{folder_name}{suffix}.strm")
+                        url = build_proxy_url(base_url, "movie", str(movie.uuid), rel.stream_id)
+                        try:
+                            result = write_strm(path, url, dry_run)
+                        except OSError:
+                            errors += 1
+                            continue
+                        current_paths.add(path)
+                        written_by_profile[profile.name] += 1
+                        if result == "created":
+                            created += 1
+                        elif result == "updated":
+                            updated += 1
+                        else:
+                            unchanged += 1
+
+                        if not write_nfo:
+                            continue
+                        xml = build_nfo_xml("movie", movie.tmdb_id, movie.imdb_id, rel.custom_properties)
+                        if xml is None:
+                            continue
+                        sidecar = nfo_path(path)
+                        try:
+                            nfo_result = write_strm(sidecar, xml, dry_run)
+                        except OSError:
+                            errors += 1
+                            continue
+                        current_nfo_paths.add(sidecar)
+                        if nfo_result in ("created", "updated"):
+                            nfo_written += 1
 
             # Anything this plugin wrote last time but didn't write again just
             # now belongs to a relation that's been pruned, a movie that's
@@ -474,8 +508,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 removed = len(stale)
                 nfo_removed = len(stale_nfo)
             else:
-                removed = remove_stale_files(stale, stop_dir=library_dir)
-                nfo_removed = remove_stale_files(stale_nfo, stop_dir=library_dir)
+                removed = remove_stale_files_in_library(stale, library_root, profile_dirs)
+                nfo_removed = remove_stale_files_in_library(stale_nfo, library_root, profile_dirs)
                 self.store.save_strm_manifest(CONTENT_TYPE_MOVIE, current_paths)
                 self.store.save_strm_manifest(CONTENT_TYPE_MOVIE + "_nfo", current_nfo_paths)
 
@@ -485,6 +519,10 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 msg += f" {nfo_written} nfo written, {nfo_removed} nfo removed."
             if skipped_no_id:
                 msg += f" {skipped_no_id} skipped (no id)."
+            if len(profiles) > 1:
+                msg += " By profile: " + ", ".join(f"{name} {n}" for name, n in written_by_profile.items()) + "."
+            if unrouted:
+                msg += f" {unrouted} movie(s) matched no profile."
             if errors:
                 msg += f" {errors} write error(s)."
             return {"status": "ok", "message": msg}
@@ -500,7 +538,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
 
             from . import measurements
             from .nfo import build_nfo_xml, nfo_path
-            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files, sanitize_filename, write_strm
+            from .profiles import assign
+            from .strm import best_quality_first, build_proxy_url, id_tag, plan_suffixes, remove_stale_files_in_library, sanitize_filename, write_strm
 
             blocker = self._generate_blocker(CONTENT_TYPE_SERIES, settings)
             if blocker:
@@ -508,8 +547,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
             dry_run = bool(settings.get("dry_run", True))
             base_url = (settings.get("strm_dispatcharr_url") or "").strip()
             library_root = (settings.get("strm_library_path") or "").strip()
-            subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
-            library_dir = os.path.join(library_root, subfolder)
+            profiles = self._profiles(settings)
+            profile_dirs = [os.path.join(library_root, p.series_dir) for p in profiles]
             include_id_tag = bool(settings.get("strm_include_id_tag"))
             require_id = bool(settings.get("strm_require_id"))
             write_nfo = bool(settings.get("strm_write_nfo"))
@@ -520,13 +559,15 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 .order_by("episode_id", "id")
             )
             quality_by_relation = {r.id: measurements.tier(r.custom_properties) for r in relations}
+            languages_by_relation = {r.id: measurements.languages(r.custom_properties) for r in relations}
 
             by_episode = {}
             for rel in relations:
                 by_episode.setdefault(rel.episode_id, []).append(rel)
 
-            created = updated = unchanged = errors = 0
+            created = updated = unchanged = errors = unrouted = 0
             nfo_written = 0
+            written_by_profile = {p.name: 0 for p in profiles}
             current_paths = set()
             current_nfo_paths = set()
             series_seen = set()
@@ -540,51 +581,62 @@ class Plugin(PipelineMixin, ScheduleMixin):
                     # gets cleaned up by the stale-file pass below.
                     series_skipped_no_id.add(series.id)
                     continue
-                series_seen.add(series.id)
 
                 # Jellyfin 12.0+ groups episode versions by season/episode
                 # number, not by this tag (unlike movies, see Limitations) —
                 # repeated here only for naming consistency with movies.
                 tag = id_tag(series.tmdb_id, series.imdb_id) if include_id_tag else ""
                 series_folder_name = sanitize_filename(series.name + tag)
-                series_dir = os.path.join(library_dir, series_folder_name)
                 season_num = episode.season_number or 1
                 episode_num = episode.episode_number or 0
                 base_filename = f"{series_folder_name} - S{season_num:02d}E{episode_num:02d}"
-                season_dir = os.path.join(series_dir, f"Season {season_num:02d}")
 
-                suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in episode_relations])
+                routed = {}
+                for rel in episode_relations:
+                    for profile in assign(profiles, languages_by_relation[rel.id]):
+                        routed.setdefault(profile, []).append(rel)
+                if not routed:
+                    unrouted += 1
+                    continue
+                series_seen.add(series.id)
 
-                for rel, suffix in best_quality_first(episode_relations, suffixes):
-                    path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
-                    url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
-                    try:
-                        result = write_strm(path, url, dry_run)
-                    except OSError:
-                        errors += 1
-                        continue
-                    current_paths.add(path)
-                    if result == "created":
-                        created += 1
-                    elif result == "updated":
-                        updated += 1
-                    else:
-                        unchanged += 1
+                for profile, profile_relations in routed.items():
+                    season_dir = os.path.join(
+                        library_root, profile.series_dir, series_folder_name, f"Season {season_num:02d}"
+                    )
+                    suffixes = plan_suffixes([quality_by_relation.get(r.id) for r in profile_relations])
 
-                    if not write_nfo:
-                        continue
-                    xml = build_nfo_xml("episodedetails", episode.tmdb_id, episode.imdb_id, rel.custom_properties)
-                    if xml is None:
-                        continue
-                    sidecar = nfo_path(path)
-                    try:
-                        nfo_result = write_strm(sidecar, xml, dry_run)
-                    except OSError:
-                        errors += 1
-                        continue
-                    current_nfo_paths.add(sidecar)
-                    if nfo_result in ("created", "updated"):
-                        nfo_written += 1
+                    for rel, suffix in best_quality_first(profile_relations, suffixes):
+                        path = os.path.join(season_dir, f"{base_filename}{suffix}.strm")
+                        url = build_proxy_url(base_url, "episode", str(episode.uuid), rel.stream_id)
+                        try:
+                            result = write_strm(path, url, dry_run)
+                        except OSError:
+                            errors += 1
+                            continue
+                        current_paths.add(path)
+                        written_by_profile[profile.name] += 1
+                        if result == "created":
+                            created += 1
+                        elif result == "updated":
+                            updated += 1
+                        else:
+                            unchanged += 1
+
+                        if not write_nfo:
+                            continue
+                        xml = build_nfo_xml("episodedetails", episode.tmdb_id, episode.imdb_id, rel.custom_properties)
+                        if xml is None:
+                            continue
+                        sidecar = nfo_path(path)
+                        try:
+                            nfo_result = write_strm(sidecar, xml, dry_run)
+                        except OSError:
+                            errors += 1
+                            continue
+                        current_nfo_paths.add(sidecar)
+                        if nfo_result in ("created", "updated"):
+                            nfo_written += 1
 
             stale = self.store.get_strm_manifest(CONTENT_TYPE_EPISODE) - current_paths
             stale_nfo = self.store.get_strm_manifest(CONTENT_TYPE_EPISODE + "_nfo") - current_nfo_paths
@@ -592,8 +644,8 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 removed = len(stale)
                 nfo_removed = len(stale_nfo)
             else:
-                removed = remove_stale_files(stale, stop_dir=library_dir)
-                nfo_removed = remove_stale_files(stale_nfo, stop_dir=library_dir)
+                removed = remove_stale_files_in_library(stale, library_root, profile_dirs)
+                nfo_removed = remove_stale_files_in_library(stale_nfo, library_root, profile_dirs)
                 self.store.save_strm_manifest(CONTENT_TYPE_EPISODE, current_paths)
                 self.store.save_strm_manifest(CONTENT_TYPE_EPISODE + "_nfo", current_nfo_paths)
 
@@ -603,6 +655,10 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 msg += f" {nfo_written} nfo written, {nfo_removed} nfo removed."
             if series_skipped_no_id:
                 msg += f" {len(series_skipped_no_id)} skipped (no id)."
+            if len(profiles) > 1:
+                msg += " By profile: " + ", ".join(f"{name} {n}" for name, n in written_by_profile.items()) + "."
+            if unrouted:
+                msg += f" {unrouted} episode(s) matched no profile."
             if errors:
                 msg += f" {errors} write error(s)."
             return {"status": "ok", "message": msg}
@@ -611,20 +667,43 @@ class Plugin(PipelineMixin, ScheduleMixin):
 
     def _delete_strm_files(self, settings):
         """Deletes every file and folder inside the configured Movies/Series
-        .strm subfolders (the subfolders themselves are kept, in case a
-        media server has them mounted as its library root), and clears the
-        .strm manifest so the next Generate starts from a clean slate."""
+        .strm subfolders (every profile's, see strm_profiles; the subfolders
+        themselves are kept, in case a media server has them mounted as its
+        library root), plus the files this plugin wrote in the folder of a
+        profile since removed from the settings, and clears the .strm
+        manifest so the next Generate starts from a clean slate."""
         import shutil
 
         library_root = (settings.get("strm_library_path") or "").strip()
         if not library_root:
             return {"status": "error", "message": "Set 'Library root path' in [.STRM OUTPUT] first."}
-        movies_subfolder = (settings.get("strm_movies_subfolder") or "movies").strip() or "movies"
-        series_subfolder = (settings.get("strm_series_subfolder") or "series").strip() or "series"
+        from .profiles import ProfileError
+
+        try:
+            profiles = self._profiles(settings)
+        except ProfileError as exc:
+            return {"status": "error", "message": f".STRM profiles: {exc}. Nothing was deleted."}
+        subfolders = []
+        for profile in profiles:
+            for subfolder in (profile.movies_dir, profile.series_dir):
+                if subfolder not in subfolders:
+                    subfolders.append(subfolder)
+        # A profile removed from the settings since the last Generate left
+        # files behind that this plugin wrote. Only those files (known from
+        # the manifests) go, never the whole folder: it is no longer ours.
+        root = os.path.normpath(library_root)
+        known_dirs = [os.path.join(root, sub) + os.sep for sub in subfolders]
+        orphaned_files = [
+            path
+            for kind in (CONTENT_TYPE_MOVIE, CONTENT_TYPE_EPISODE, CONTENT_TYPE_MOVIE + "_nfo", CONTENT_TYPE_EPISODE + "_nfo")
+            for path in self.store.get_strm_manifest(kind)
+            if not any(os.path.normpath(path).startswith(d) for d in known_dirs)
+            and os.path.exists(path)
+        ]
         dry_run = bool(settings.get("dry_run", True))
 
         cleared = []
-        for subfolder in (movies_subfolder, series_subfolder):
+        for subfolder in subfolders:
             target = os.path.join(library_root, subfolder)
             if not os.path.isdir(target):
                 continue
@@ -641,6 +720,15 @@ class Plugin(PipelineMixin, ScheduleMixin):
                 else:
                     os.remove(entry_path)
             cleared.append(target)
+
+        if orphaned_files:
+            if dry_run:
+                cleared.append(f"{len(orphaned_files)} file(s) of removed profiles")
+            else:
+                from .strm import remove_stale_files_in_library
+
+                remove_stale_files_in_library(orphaned_files, library_root)
+                cleared.append(f"{len(orphaned_files)} file(s) of removed profiles")
 
         if not cleared:
             return {"status": "ok", "message": "Nothing to delete — no .strm folders found at the configured path."}
