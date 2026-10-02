@@ -65,3 +65,21 @@ def test_series_ready_accepts_partial_as_a_final_answer():
     # vod-probe writes "partial" when some seasons answered and one or more
     # are confirmed dead — also done deciding, even though it's a mix.
     assert measurements.series_ready(props(status="partial"))
+
+
+def test_series_ready_when_vod_probe_gave_up_on_a_series_with_no_episode():
+    # vod-probe stops reloading an empty series after 3 tries but leaves it
+    # "pending"; waiting on it would never end.
+    gave_up = props(status="pending", episodes=0, attempts=3)
+    assert measurements.series_given_up_empty(gave_up)
+    assert measurements.series_ready(gave_up)
+
+
+def test_series_still_waits_while_vod_probe_may_try_again():
+    assert not measurements.series_ready(props(status="pending", episodes=0, attempts=2))
+    assert not measurements.series_ready(props(status="pending", episodes=0))
+    # episodes were seen: it is sampling them, not empty
+    assert not measurements.series_ready(props(status="pending", episodes=12, attempts=5))
+    assert not measurements.series_given_up_empty(props(status="ok", episodes=0, attempts=9))
+    assert not measurements.series_given_up_empty(None)
+    assert not measurements.series_given_up_empty(props(status="pending", episodes=0, attempts="many"))
