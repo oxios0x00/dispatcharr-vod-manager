@@ -86,3 +86,24 @@ def test_delete_strm_files_for_real_deletes_and_clears_manifest(tmp_path):
         assert "Cleared" in result["message"]
 
     with_plugin(check)
+
+
+def test_scheduled_run_settings_fill_in_manifest_defaults_without_overriding_stored():
+    from test_pipeline import plugin_module
+    import importlib
+    schedule = importlib.import_module("vod_manager_pkg.schedule")
+    fields = [{"id": "a", "default": 1}, {"id": "b", "default": 2}, {"id": "no_default"}]
+    merged = schedule.merge_with_defaults({"a": 9}, fields)
+    assert merged == {"a": 9, "b": 2}
+    assert schedule.merge_with_defaults(None, fields) == {"a": 1, "b": 2}
+
+
+def test_scheduled_run_falls_back_to_the_snapshot_when_settings_cannot_be_read():
+    from test_pipeline import with_plugin
+
+    def check(plugin):
+        # Django is not installed here, so the stored settings are unreachable.
+        assert plugin._live_settings({"x": 1}) == {"x": 1}
+        assert plugin._live_settings(None) == {}
+
+    with_plugin(check)

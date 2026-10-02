@@ -844,9 +844,11 @@ try:
         import logging
 
         logger = logging.getLogger("vod_manager.schedule")
-        result = Plugin().run(
+        plugin = Plugin()
+        live = plugin._live_settings(settings) if scheduled else (settings or {})
+        result = plugin.run(
             action, {},
-            {"logger": logger, "settings": settings or {}, "scheduled": scheduled, "background": True},
+            {"logger": logger, "settings": live, "scheduled": scheduled, "background": True},
         )
         if result.get("status") == "error":
             logger.error("Scheduled action '%s' failed: %s", action, result.get("message"))

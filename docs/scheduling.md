@@ -9,7 +9,7 @@ The plugin can run one action on its own cron schedule, independent of Dispatcha
 3. **Restart Dispatcharr once.** A Celery worker only registers a plugin's scheduled task when it starts. Without the restart, Apply succeeds silently but the task never fires and Status stays on "last run: never".
 4. Use **[SCHEDULE] Status** to see when it last ran.
 
-Re-click Apply whenever you change the cron or action, or any setting the scheduled run should use: settings are snapshotted at Apply time, not read live.
+Re-click Apply when you change the cron or the action. The other settings are read when the scheduled run fires, so a change made after Apply applies to the next run (earlier versions used a copy taken at Apply time, which could leave a run without your newer settings).
 
 ## When to schedule it
 

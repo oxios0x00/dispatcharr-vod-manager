@@ -8,8 +8,24 @@ A mixin, combined into Plugin alongside PipelineMixin — see pipeline.py's
 module docstring for why.
 """
 import json
+import logging
+import os
 
 from .pipeline import _system_timezone_name
+
+logger = logging.getLogger("vod_manager.schedule")
+
+
+def merge_with_defaults(stored, fields):
+    """The settings a manual run receives: what is stored, plus the manifest
+    default of every field never saved (same rule as Dispatcharr's loader,
+    `_merge_settings_with_defaults`). Pure, so it is unit-tested."""
+    merged = dict(stored or {})
+    for field in fields or []:
+        field_id = field.get("id")
+        if field_id and field_id not in merged and "default" in field:
+            merged[field_id] = field["default"]
+    return merged
 
 
 class ScheduleMixin:
@@ -18,9 +34,11 @@ class ScheduleMixin:
     SCHEDULE_TASK_NAME = "vod_manager.auto_run"
     SCHEDULED_TASK_CELERY_NAME = "vod_manager.scheduled_run"
 
-    # Settings are snapshotted into the PeriodicTask's kwargs at Apply time,
-    # not read live — re-click Apply after changing any other setting to
-    # refresh what the scheduled run actually uses.
+    # The PeriodicTask's kwargs still carry a snapshot of the settings taken at
+    # Apply time, but a scheduled run no longer uses it: it reads the current
+    # settings when it fires (see _live_settings), so a setting changed since
+    # Apply applies to the next run. The snapshot is only the fallback if the
+    # stored settings cannot be read.
     _VALID_SCHEDULE_TARGETS = (
         "scan_and_process",
         "scan_movies",
@@ -32,6 +50,20 @@ class ScheduleMixin:
         "generate_movie_strm",
         "generate_series_strm",
     )
+
+    def _live_settings(self, snapshot):
+        """The current stored settings (defaults filled in), or `snapshot`
+        when they cannot be read. A scheduled run that used a stale snapshot
+        once wrote files with no language profiles and removed every .nfo."""
+        try:
+            from apps.plugins.models import PluginConfig
+
+            key = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+            stored = PluginConfig.objects.get(key=key).settings or {}
+            return merge_with_defaults(stored, self.fields)
+        except Exception as e:
+            logger.warning("Could not read the current settings, using the Apply-time snapshot: %s", e)
+            return snapshot or {}
 
     def _parse_cron(self, cron_expr):
         fields = (cron_expr or "").split()
