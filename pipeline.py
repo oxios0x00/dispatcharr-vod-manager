@@ -587,10 +587,14 @@ class PipelineMixin:
 
         if excluded:
             loser_ids = {r.id for relations in by_episode.values() for r in relations}
-        elif not by_episode and all(measurements.series_given_up_empty(r.custom_properties) for r in series_relations):
-            # vod-probe gave up on every version of this series for lack of any
-            # episode: nothing to choose between, nothing to prune, and nothing
-            # left to wait for (it would stay "pending" for good).
+        elif all(measurements.series_given_up(r.custom_properties) for r in series_relations) and not any(
+            measurements.state(r.custom_properties) == measurements.MEASURED
+            for relations in by_episode.values() for r in relations
+        ):
+            # vod-probe gave up on every version of this series (no episode, or
+            # a sample episode the provider keeps refusing) and measured none
+            # of the episodes: nothing to choose between, nothing to prune, and
+            # nothing left to wait for (it would stay "pending" for good).
             loser_ids = set()
         else:
             if not by_episode:

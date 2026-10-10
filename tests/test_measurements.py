@@ -71,15 +71,22 @@ def test_series_ready_when_vod_probe_gave_up_on_a_series_with_no_episode():
     # vod-probe stops reloading an empty series after 3 tries but leaves it
     # "pending"; waiting on it would never end.
     gave_up = props(status="pending", episodes=0, attempts=3)
-    assert measurements.series_given_up_empty(gave_up)
+    assert measurements.series_given_up(gave_up)
     assert measurements.series_ready(gave_up)
+
+
+def test_series_ready_when_vod_probe_gave_up_on_a_series_whose_sample_episode_keeps_failing():
+    # 30 episodes listed, but the provider answers 400 on the sample one:
+    # vod-probe tried 5 times and left it "pending" for good.
+    stuck = props(status="pending", episodes=30, attempts=5)
+    assert measurements.series_given_up(stuck)
+    assert measurements.series_ready(stuck)
 
 
 def test_series_still_waits_while_vod_probe_may_try_again():
     assert not measurements.series_ready(props(status="pending", episodes=0, attempts=2))
     assert not measurements.series_ready(props(status="pending", episodes=0))
-    # episodes were seen: it is sampling them, not empty
-    assert not measurements.series_ready(props(status="pending", episodes=12, attempts=5))
-    assert not measurements.series_given_up_empty(props(status="ok", episodes=0, attempts=9))
-    assert not measurements.series_given_up_empty(None)
-    assert not measurements.series_given_up_empty(props(status="pending", episodes=0, attempts="many"))
+    assert not measurements.series_ready(props(status="pending", episodes=12, attempts=2))
+    assert not measurements.series_given_up(props(status="ok", episodes=0, attempts=9))
+    assert not measurements.series_given_up(None)
+    assert not measurements.series_given_up(props(status="pending", episodes=0, attempts="many"))
