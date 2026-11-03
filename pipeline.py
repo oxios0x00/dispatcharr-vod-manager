@@ -317,8 +317,7 @@ class PipelineMixin:
         ).values_list(id_field, "id"):
             current.setdefault(content_id, set()).add(relation_id)
         changed = self.store.changed_content_ids(content_type, current)
-        for content_id in changed:
-            self.store.requeue(content_type, content_id)
+        self.store.requeue_many(content_type, changed)
         return len(current), len(changed)
 
     def _scan_movies(self, settings):
@@ -587,7 +586,11 @@ class PipelineMixin:
 
         if excluded:
             loser_ids = {r.id for relations in by_episode.values() for r in relations}
-        elif all(measurements.series_given_up(r.custom_properties) for r in series_relations) and not any(
+        elif all(
+            measurements.series_given_up(r.custom_properties)
+            or ((r.custom_properties or {}).get("probe") or {}).get("status") == "error"
+            for r in series_relations
+        ) and not any(
             measurements.state(r.custom_properties) == measurements.MEASURED
             for relations in by_episode.values() for r in relations
         ):

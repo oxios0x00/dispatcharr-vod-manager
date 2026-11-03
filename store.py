@@ -171,6 +171,35 @@ class Store:
                 (content_type, content_id, now, now),
             )
 
+    def requeue_many(self, content_type, content_ids):
+        """Requeue multiple titles using one SQLite transaction."""
+        if not content_ids:
+            return 0
+
+        now = time.time()
+
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO probe_queue
+                    (content_type, content_id, status, attempts,
+                     enqueued_at, updated_at)
+                VALUES (?, ?, 'pending', 0, ?, ?)
+                ON CONFLICT(content_type, content_id)
+                DO UPDATE SET
+                    status = 'pending',
+                    attempts = 0,
+                    last_error = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                [
+                    (content_type, content_id, now, now)
+                    for content_id in content_ids
+                ],
+            )
+
+        return len(content_ids)
+
     def claim_batch(self, content_type, limit):
         """Atomically mark up to `limit` pending rows as in_progress and
         return them. Best-effort single-process locking via SQLite's own
