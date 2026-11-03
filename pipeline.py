@@ -586,7 +586,11 @@ class PipelineMixin:
 
         if excluded:
             loser_ids = {r.id for relations in by_episode.values() for r in relations}
-        elif all(measurements.series_given_up(r.custom_properties) for r in series_relations) and not any(
+        elif all(
+            measurements.series_given_up(r.custom_properties)
+            or ((r.custom_properties or {}).get("probe") or {}).get("status") == "error"
+            for r in series_relations
+        ) and not any(
             measurements.state(r.custom_properties) == measurements.MEASURED
             for relations in by_episode.values() for r in relations
         ):
