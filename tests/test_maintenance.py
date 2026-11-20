@@ -89,7 +89,7 @@ def test_delete_strm_files_for_real_deletes_and_clears_manifest(tmp_path):
 
 
 def test_scheduled_run_settings_fill_in_manifest_defaults_without_overriding_stored():
-    from test_pipeline import plugin_module
+    from test_pipeline import plugin_module  # noqa: F401  (loads vod_manager_pkg)
     import importlib
     schedule = importlib.import_module("vod_manager_pkg.schedule")
     fields = [{"id": "a", "default": 1}, {"id": "b", "default": 2}, {"id": "no_default"}]
