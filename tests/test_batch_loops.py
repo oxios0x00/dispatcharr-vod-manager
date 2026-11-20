@@ -101,17 +101,17 @@ def movie(relation_id, movie_id, properties, tmdb_id=None):
     )
 
 
-def series_relation(relation_id, series_id, properties=None, tmdb_id=None):
+def series_relation(relation_id, series_id, properties=None, tmdb_id=None, account=1, last_episode_refresh=None):
     return SimpleNamespace(
         id=relation_id, series_id=series_id, custom_properties=properties or {"probe": {"status": "ok"}},
-        series=SimpleNamespace(tmdb_id=tmdb_id),
+        series=SimpleNamespace(tmdb_id=tmdb_id), m3u_account_id=account, last_episode_refresh=last_episode_refresh,
     )
 
 
-def episode(relation_id, episode_id, series_id, properties):
+def episode(relation_id, episode_id, series_id, properties, account=1):
     return SimpleNamespace(
         id=relation_id, episode_id=episode_id, episode=SimpleNamespace(series_id=series_id),
-        custom_properties=properties,
+        custom_properties=properties, m3u_account_id=account,
     )
 
 
@@ -301,6 +301,65 @@ def test_a_series_waits_until_vod_probe_has_finished_it_and_prunes_nothing_meanw
             assert len(models.M3UEpisodeRelation.objects.rows) == 4
         assert result["waiting"] == 2 and result["processed"] == 0
         assert plugin.store.queue_counts("series")["waiting"] == 2
+
+    with_plugin(run)
+
+
+def test_a_dead_season_of_a_partial_version_no_longer_makes_the_series_wait():
+    # Provider 2's season 2 never answered: vod-probe settled its version as
+    # "partial" and left those episodes without any result, for good.
+    def run(plugin):
+        enqueue_all(plugin, "series", [7])
+        partial = {"probe": {"status": "partial", "probed_at": "2026-11-01T10:00:00Z"}}
+        series = [series_relation(70, 7), series_relation(71, 7, partial, account=2)]
+        episodes = [
+            episode(700, 1, 7, measured("1080p")), episode(701, 1, 7, measured("2160p"), account=2),
+            episode(710, 2, 7, measured("1080p")), episode(711, 2, 7, {}, account=2),
+        ]
+        with fake_django(series_relations=series, episode_relations=episodes) as models:
+            result = process_one(plugin, "series")
+            remaining = sorted(r.id for r in models.M3UEpisodeRelation.objects.rows)
+        assert result["waiting"] == 0 and result["processed"] == 1
+        # The never-measured relation is treated like a failed one: pruned
+        # where another version of the episode measured.
+        assert remaining == [700, 701, 710] and result["pruned"] == 1
+
+    with_plugin(run)
+
+
+def test_a_series_whose_every_version_is_error_ends_as_a_title_error_not_waiting():
+    def run(plugin):
+        enqueue_all(plugin, "series", [7])
+        error = {"probe": {"status": "error", "probed_at": "2026-11-01T10:00:00Z"}}
+        series = [series_relation(70, 7, error), series_relation(71, 7, error, account=2)]
+        episodes = [
+            episode(700, 1, 7, {"probe": {"status": "error"}}), episode(701, 1, 7, {}, account=2),
+            episode(710, 2, 7, {}), episode(711, 2, 7, {}, account=2),
+        ]
+        with fake_django(series_relations=series, episode_relations=episodes) as models:
+            result = process_one(plugin, "series")
+            assert len(models.M3UEpisodeRelation.objects.rows) == 4
+        assert result["waiting"] == 0 and result["errors"] == 1
+        assert plugin.store.queue_counts("series")["waiting"] == 0
+
+    with_plugin(run)
+
+
+def test_a_settled_version_reloaded_since_its_summary_still_waits():
+    # Dispatcharr reloaded the episodes after vod-probe's summary, erasing
+    # their results: vod-probe redoes them, so the missing ones are not dead.
+    def run(plugin):
+        from datetime import datetime, timezone
+
+        enqueue_all(plugin, "series", [7])
+        partial = {"probe": {"status": "partial", "probed_at": "2026-11-01T10:00:00Z"}}
+        reloaded = datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc)
+        series = [series_relation(70, 7), series_relation(71, 7, partial, account=2, last_episode_refresh=reloaded)]
+        episodes = [episode(700, 1, 7, measured("1080p")), episode(701, 1, 7, {}, account=2)]
+        with fake_django(series_relations=series, episode_relations=episodes) as models:
+            result = process_one(plugin, "series")
+            assert len(models.M3UEpisodeRelation.objects.rows) == 2
+        assert result["waiting"] == 1 and result["pruned"] == 0
 
     with_plugin(run)
 

@@ -90,3 +90,45 @@ def test_series_still_waits_while_vod_probe_may_try_again():
     assert not measurements.series_given_up(props(status="ok", episodes=0, attempts=9))
     assert not measurements.series_given_up(None)
     assert not measurements.series_given_up(props(status="pending", episodes=0, attempts="many"))
+
+
+def test_series_settled_for_error_partial_and_given_up_versions():
+    # vod-probe only samples a few episodes: a dead season's episodes never get
+    # a result, so a version whose summary says so must not be waited on.
+    assert measurements.series_settled(props(status="error", probed_at="2026-11-01T10:00:00Z"))
+    assert measurements.series_settled(props(status="partial", probed_at="2026-11-01T10:00:00Z"))
+    assert measurements.series_settled(props(status="pending", episodes=30, attempts=3))
+    assert not measurements.series_settled(props(status="ok", probed_at="2026-11-01T10:00:00Z"))
+    assert not measurements.series_settled(props(status="pending", episodes=30, attempts=1))
+    assert not measurements.series_settled(None)
+
+
+def test_series_not_settled_while_vod_probe_will_visit_it_again():
+    from datetime import datetime, timezone
+
+    assert not measurements.series_settled(props(status="error", retry=True))
+    assert not measurements.series_settled(props(status="partial", reload=True))
+    moved = {"probe": {"status": "error", "last_modified": "100"}, "basic_data": {"last_modified": 200}}
+    assert not measurements.series_settled(moved)
+    same = {"probe": {"status": "error", "last_modified": "100"}, "basic_data": {"last_modified": 100}}
+    assert measurements.series_settled(same)
+
+    summary = props(status="partial", probed_at="2026-11-01T10:00:00Z")
+    # Dispatcharr reloaded the episodes after the summary: their results were
+    # erased and vod-probe redoes them, so missing ones are worth waiting for.
+    reloaded = datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc)
+    assert not measurements.series_settled(summary, reloaded)
+    # vod-probe's own reload, written just before its summary.
+    own = datetime(2026, 11, 1, 10, 0, 1, tzinfo=timezone.utc)
+    assert measurements.series_settled(summary, own)
+    # A naive datetime is read as UTC.
+    assert measurements.series_settled(summary, datetime(2026, 11, 1, 9, 0))
+    assert not measurements.series_settled(props(status="error"), own)
+
+
+def test_settled_state_only_turns_missing_into_failed():
+    missing, measured, failed = None, props(status="ok", tier="1080p"), props(status="error")
+    assert measurements.settled_state(missing, True) == measurements.FAILED
+    assert measurements.settled_state(missing, False) == measurements.MISSING
+    assert measurements.settled_state(measured, True) == measurements.MEASURED
+    assert measurements.settled_state(failed, False) == measurements.FAILED

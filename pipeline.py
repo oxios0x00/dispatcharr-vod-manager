@@ -600,9 +600,25 @@ class PipelineMixin:
             if not by_episode:
                 raise _WaitingForMeasurements()
 
+            # An episode vod-probe will never measure (its version is settled
+            # as "error"/"partial" or given up on, and the episode was never
+            # sampled nor inferred) counts as failed instead of making the
+            # whole series wait for good. Only when every relation of that
+            # provider for this series is settled, as an episode relation is
+            # matched to its version by provider account alone.
+            accounts = {}
+            for r in series_relations:
+                accounts.setdefault(r.m3u_account_id, []).append(
+                    measurements.series_settled(r.custom_properties, getattr(r, "last_episode_refresh", None))
+                )
+            settled_accounts = {account for account, flags in accounts.items() if all(flags)}
+
             decisions, without_candidates = [], 0
             for ep_relations in by_episode.values():
-                states = [measurements.state(r.custom_properties) for r in ep_relations]
+                states = [
+                    measurements.settled_state(r.custom_properties, r.m3u_account_id in settled_accounts)
+                    for r in ep_relations
+                ]
                 if measurements.MISSING in states:
                     raise _WaitingForMeasurements()
                 candidates = [

@@ -4,6 +4,8 @@ vod-probe measures every VOD relation once and writes a `probe` block (and a
 `quality`) into the relation; this plugin no longer runs ffprobe itself. Pure
 Python, no Django, so it is unit-tested outside Dispatcharr."""
 
+from datetime import datetime, timedelta, timezone
+
 MEASURED = "measured"
 FAILED = "failed"
 MISSING = "missing"
@@ -98,3 +100,55 @@ def series_ready(custom_properties):
     measure."""
     found = block(custom_properties)
     return (bool(found) and found.get("status") in _SERIES_DONE_STATUSES) or series_given_up(custom_properties)
+
+
+# vod-probe takes a series reload for its own when last_episode_refresh is
+# within this much of its summary's probed_at (RELOAD_TOLERANCE in its
+# contract.py): the summary's time is truncated to the second.
+_RELOAD_TOLERANCE = timedelta(seconds=2)
+
+
+def _parse_iso(text):
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def series_settled(custom_properties, last_episode_refresh=None):
+    """Whether vod-probe will never come back to the episodes of this series
+    version on its own: its summary is "error" or "partial" (every sample, or
+    every sample of some seasons, failed), or it gave up on it (see
+    series_given_up). vod-probe only samples a few episodes per series and
+    copies a result to the others when one answers, so the episodes of a dead
+    season stay without any result for good; waiting for them would never end.
+
+    Not settled while vod-probe still has a reason to visit it again, the same
+    ones its series_work() checks: Retry Errors or Reload Incomplete Series
+    flagged it, the provider's last_modified moved, or Dispatcharr reloaded
+    the episodes after the summary (which erases their results, so a missing
+    result then means "not redone yet", not "never")."""
+    found = block(custom_properties)
+    if not found or found.get("retry") or found.get("reload"):
+        return False
+    if found.get("status") not in ("error", "partial") and not series_given_up(custom_properties):
+        return False
+    current = ((custom_properties or {}).get("basic_data") or {}).get("last_modified")
+    if current is not None and str(current) != str(found.get("last_modified")):
+        return False
+    if last_episode_refresh is not None:
+        summarised_at = _parse_iso(found.get("probed_at"))
+        if summarised_at is None:
+            return False
+        if last_episode_refresh.tzinfo is None:
+            last_episode_refresh = last_episode_refresh.replace(tzinfo=timezone.utc)
+        if last_episode_refresh > summarised_at + _RELOAD_TOLERANCE:
+            return False
+    return True
+
+
+def settled_state(custom_properties, version_settled):
+    """state(), except that an episode still MISSING is FAILED when its series
+    version is settled (see series_settled): nothing will ever measure it."""
+    found = state(custom_properties)
+    return FAILED if found == MISSING and version_settled else found
